@@ -7,7 +7,7 @@
     "dev": "concurrently \"npm:dev:server\" \"npm:dev:client\"",
     "dev:server": "node server/index.js",
     "dev:client": "vite --host 127.0.0.1 --port 5173",
-    "start": "node server/index.js",
+    "start": "node app.cjs",
     "build": "vite build",
     "db:migrate": "node server/migrate-to-mysql.js",
     "preview": "vite preview --host 127.0.0.1 --port 4173"
