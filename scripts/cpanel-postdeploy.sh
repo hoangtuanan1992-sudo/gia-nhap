@@ -13,7 +13,7 @@ if ! command -v npm >/dev/null 2>&1; then
 fi
 
 npm install
-npm run build
+npm run cpanel:build
 
 if [ -n "$DB_HOST" ] && [ -n "$DB_NAME" ] && [ -n "$DB_USER" ]; then
   npm run db:migrate
