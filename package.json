@@ -1,0 +1,29 @@
+{
+  "name": "ai-product-sheet",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "node server/index.js",
+    "dev:client": "vite --host 127.0.0.1 --port 5173",
+    "start": "node server/index.js",
+    "build": "vite build",
+    "db:migrate": "node server/migrate-to-mysql.js",
+    "preview": "vite preview --host 127.0.0.1 --port 4173"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.1.2",
+    "concurrently": "^9.2.1",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "googleapis": "^166.0.0",
+    "lucide-react": "^0.561.0",
+    "mysql2": "^3.22.3",
+    "openai": "^6.10.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "vite": "^7.3.0"
+  }
+}
