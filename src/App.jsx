@@ -3447,7 +3447,7 @@ function resolveSalePrice(row) {
             <Sparkles size={24} />
           </div>
           <div className="chat-title-block">
-            <h1>Chuẩn hóa dữ liệu sản phẩm</h1>
+            <h1>Chuẩn hóa GIÁ NHẬP</h1>
             <p className="eyebrow">AI Product Sheet</p>
           </div>
           <div className="header-actions">
