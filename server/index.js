@@ -2639,8 +2639,7 @@ async function appendProducts(products, settings = {}, req) {
     await appendSheetProducts(safeProducts, shopConfig);
     return "google-sheets";
   } catch (error) {
-    await appendLocalProducts(safeProducts, shopId);
-    return `local-fallback: ${error.message}`;
+    throw new Error(`Không ghi được Google Sheets: ${error.message}`);
   }
 }
 
@@ -2981,6 +2980,17 @@ app.post("/api/settings", async (req, res, next) => {
     config.sheets.sheetTab = sheetTab;
     config.sheets.serviceAccountEmail = sheetServiceAccountEmail;
     config.sheets.privateKey = sheetPrivateKey;
+
+    if (isSheetsConfigured(config)) {
+      try {
+        await readSheetProducts(config);
+      } catch (error) {
+        res.status(400).json({
+          error: `Không kết nối được Google Sheets: ${error.message}`
+        });
+        return;
+      }
+    }
 
     await saveRuntimeConfig();
     res.json(buildConfigResponse(shopId));
