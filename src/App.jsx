@@ -981,6 +981,7 @@ function App() {
   const [selectedColumn, setSelectedColumn] = useState(outputColumns[0].id);
   const [modelOptions, setModelOptions] = useState(defaultModelOptionsByProvider[defaultProvider]);
   const [settingsStatus, setSettingsStatus] = useState("");
+  const [sheetSettingsStatus, setSheetSettingsStatus] = useState("");
   const [supplierDraft, setSupplierDraft] = useState({
     name: ""
   });
@@ -2486,6 +2487,7 @@ function resolveSalePrice(row) {
   async function saveSettings() {
     setIsSavingSettings(true);
     setSettingsStatus("");
+    setSheetSettingsStatus("");
     try {
         const response = await authFetch("/api/settings", {
           method: "POST",
@@ -2534,8 +2536,11 @@ function resolveSalePrice(row) {
         mergeModelOptions(normalizeProvider(payload.provider), payload.modelOptions || [], payload.model || selectedModel)
       );
       setSettingsStatus("Đã lưu cài đặt.");
+      setSheetSettingsStatus(payload.sheetsConfigured ? "Đã lưu và kiểm tra được Google Sheets." : "");
     } catch (error) {
-      setSettingsStatus(humanizeApiError(error.message, selectedProvider));
+      const message = humanizeApiError(error.message, selectedProvider);
+      setSettingsStatus(message);
+      setSheetSettingsStatus(message);
     } finally {
       setIsSavingSettings(false);
     }
@@ -3028,6 +3033,7 @@ function resolveSalePrice(row) {
               </div>
             </div>
 
+            {sheetSettingsStatus ? <p className="form-status">{sheetSettingsStatus}</p> : null}
             <p className="field-hint sheet-config-hint">
               Chia sẻ file Google Sheets cho email service account với quyền Editor, rồi lưu lại. Khi cấu hình đủ,
               bảng bên phải sẽ đồng bộ trực tiếp với sheet này.
