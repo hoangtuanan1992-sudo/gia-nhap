@@ -6,7 +6,11 @@ import path from "node:path";
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import OpenAI from "openai";
-import { appendSheetProducts, isSheetsConfigured, readSheetProducts } from "./googleSheets.js";
+import {
+  isSheetsConfigured,
+  readSheetProducts,
+  writeSheetWorkbookProducts
+} from "./googleSheets.js";
 import {
   initMysqlSchema,
   isMysqlConfigured,
@@ -745,6 +749,69 @@ function parsePriceAmount(value) {
 
 function formatPriceAmount(value) {
   return Number.isFinite(value) && value > 0 ? `${value.toLocaleString("vi-VN")} đ` : "";
+}
+
+function productWorkbookKey(row = {}, settings = {}) {
+  return resolveMatchedProductCode(row, settings) || normalizeRuleCode(row.productName);
+}
+
+function cheapestProductRows(rows = [], settings = {}) {
+  const byProduct = new Map();
+
+  for (const row of sanitizeProductRows(rows)) {
+    const key = productWorkbookKey(row, settings);
+    const price = parsePriceAmount(row.purchasePrice);
+    if (!key || !Number.isFinite(price)) {
+      continue;
+    }
+
+    const current = byProduct.get(key);
+    if (!current || price < current.price) {
+      byProduct.set(key, { price, row });
+    }
+  }
+
+  return [...byProduct.values()].map((item) => item.row);
+}
+
+function supplierProductGroups(rows = [], settings = {}) {
+  const groups = new Map();
+
+  for (const supplier of settings.suppliers || []) {
+    const name = clean(supplier?.name);
+    if (name && !groups.has(name)) {
+      groups.set(name, []);
+    }
+  }
+
+  for (const row of sanitizeProductRows(rows)) {
+    const supplier = clean(row.supplier);
+    if (!supplier) {
+      continue;
+    }
+
+    if (!groups.has(supplier)) {
+      groups.set(supplier, []);
+    }
+    groups.get(supplier).push(row);
+  }
+
+  return [...groups.entries()].map(([title, groupRows]) => ({
+    title,
+    rows: groupRows
+  }));
+}
+
+async function syncSheetWorkbookProducts(rows = [], settings = {}, config = runtimeConfig) {
+  const safeRows = sanitizeProductRows(recalculateProductsWithSettings(rows, settings));
+  await writeSheetWorkbookProducts(
+    {
+      allRows: safeRows,
+      cheapestRows: cheapestProductRows(safeRows, settings),
+      supplierGroups: supplierProductGroups(safeRows, settings)
+    },
+    config
+  );
 }
 
 function applySalePriceVisibility(rows = [], settings = {}) {
@@ -2636,7 +2703,9 @@ async function appendProducts(products, settings = {}, req) {
   }
 
   try {
-    await appendSheetProducts(safeProducts, shopConfig);
+    const currentRows = sanitizeProductRows(await readSheetProducts(shopConfig));
+    const nextRows = upsertProductRows(currentRows, safeProducts);
+    await syncSheetWorkbookProducts(nextRows, settings, shopConfig);
     return "google-sheets";
   } catch (error) {
     throw new Error(`Không ghi được Google Sheets: ${error.message}`);
@@ -3077,11 +3146,14 @@ app.post("/api/products/recalculate", async (req, res, next) => {
   try {
     const settings = req.body?.settings || {};
 
-    if (isSheetsConfigured(getRuntimeForShop(requestShopId(req)))) {
+    const shopConfig = getRuntimeForShop(requestShopId(req));
+    if (isSheetsConfigured(shopConfig)) {
+      const currentRows = sanitizeProductRows(await readSheetProducts(shopConfig));
+      await syncSheetWorkbookProducts(currentRows, settings, shopConfig);
       res.json({
         ...(await readProducts(req)),
-        updated: 0,
-        warning: "Tinh lai theo cai dat hien chi ap dung cho bang cuc bo."
+        updated: currentRows.length,
+        warning: "Da cap nhat Google Sheets theo cai dat moi."
       });
       return;
     }
