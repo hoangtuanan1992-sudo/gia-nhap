@@ -2570,7 +2570,6 @@ function resolveSalePrice(row) {
               <input
                 value={loginForm.username}
                 onChange={(event) => setLoginForm((current) => ({ ...current, username: event.target.value }))}
-                placeholder="admin"
                 autoComplete="username"
               />
             </label>
@@ -2580,7 +2579,6 @@ function resolveSalePrice(row) {
                 type="password"
                 value={loginForm.password}
                 onChange={(event) => setLoginForm((current) => ({ ...current, password: event.target.value }))}
-                placeholder="admin123"
                 autoComplete="current-password"
               />
             </label>
@@ -2590,7 +2588,6 @@ function resolveSalePrice(row) {
               <span>Đăng nhập</span>
             </button>
           </form>
-          <p className="login-hint">Admin mặc định: admin / admin123</p>
         </section>
       </main>
     );
