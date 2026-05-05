@@ -157,6 +157,8 @@ async function ensureHeader(sheets, config = runtimeConfig, sheetTitle = tabName
       requestBody: { values: [HEADER] }
     });
   }
+
+  return sheet;
 }
 
 export async function readSheetProducts(config = runtimeConfig) {
@@ -178,12 +180,11 @@ async function replaceSheetProducts(sheets, config, sheetTitle, products = []) {
   const spreadsheetId = config.sheets?.sheetId;
   const sheet = await ensureHeader(sheets, config, sheetTitle);
 
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId,
-    range: `${quoteSheetTitle(sheet)}!A2:I`
-  });
-
   if (!products.length) {
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: `${quoteSheetTitle(sheet)}!A2:I`
+    });
     return;
   }
 
@@ -194,6 +195,11 @@ async function replaceSheetProducts(sheets, config, sheetTitle, products = []) {
     requestBody: {
       values: products.map(toSheetRow)
     }
+  });
+
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId,
+    range: `${quoteSheetTitle(sheet)}!A${products.length + 2}:I`
   });
 }
 
