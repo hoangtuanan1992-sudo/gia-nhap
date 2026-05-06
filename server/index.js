@@ -295,6 +295,24 @@ function clean(value) {
   return String(value ?? "").trim();
 }
 
+function looksLikeBrokenVietnamese(value = "") {
+  const text = clean(value);
+  if (!text) {
+    return false;
+  }
+
+  return /(?:DDe[0-9a-f]|DD[0-9a-f]{2}|Đ[0-9a-f]{2}|Ä|Ă|Â|�)/i.test(text);
+}
+
+function safeAssistantReply(value = "", rowCount = 0) {
+  const text = clean(value);
+  if (!text || looksLikeBrokenVietnamese(text)) {
+    return `Da chuan hoa ${rowCount || 0} dong san pham.`;
+  }
+
+  return text;
+}
+
 function hashPassword(password, salt = randomBytes(16).toString("hex")) {
   const hash = scryptSync(String(password || ""), salt, 64).toString("hex");
   return `${salt}:${hash}`;
@@ -3386,14 +3404,14 @@ app.post("/api/chat", async (req, res, next) => {
       .join(" ");
 
     res.json({
-      reply: result.reply,
+      reply: safeAssistantReply(result.reply, rows.length),
       rows: responseRows,
       batchId: undoable ? batchId : "",
       source,
       warning:
         warning ||
         (shouldAutoAdd && !undoable
-          ? "?? l?u v?o Google Sheets; ho?n t?c t? ??ng hi?n ch? h? tr? b?ng c?c b?."
+          ? "Da luu vao Google Sheets. Hoan tac tu dong hien chi ho tro bang cuc bo."
           : "")
     });
   } catch (error) {
