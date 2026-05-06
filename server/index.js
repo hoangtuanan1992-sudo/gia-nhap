@@ -937,6 +937,7 @@ function recalculateProductsWithSettings(rows = [], settings = {}) {
     const explicitMinPrice = parsePriceAmount(next.minPrice);
     const minPrice = Number.isFinite(explicitMinPrice) ? explicitMinPrice : minPriceByCode.get(code);
     const margin = marginRules.get(code);
+    next.minPrice = Number.isFinite(minPrice) ? formatPriceAmount(minPrice) : "";
     next.salePrice = Number.isFinite(margin) && Number.isFinite(minPrice) ? formatPriceAmount(minPrice + margin) : "";
 
     const giftRules = supplierGiftRules.get(foldText(next.supplier));
@@ -3146,9 +3147,12 @@ app.post("/api/products/recalculate", async (req, res, next) => {
   try {
     const settings = req.body?.settings || {};
 
-    const shopConfig = getRuntimeForShop(requestShopId(req));
+    const shopId = requestShopId(req);
+    const shopConfig = getRuntimeForShop(shopId);
     if (isSheetsConfigured(shopConfig)) {
-      const currentRows = sanitizeProductRows(await readSheetProducts(shopConfig));
+      const sheetRows = sanitizeProductRows(await readSheetProducts(shopConfig));
+      const localRows = sanitizeProductRows(await readLocalProducts(shopId));
+      const currentRows = sheetRows.length ? sheetRows : localRows;
       await syncSheetWorkbookProducts(currentRows, settings, shopConfig);
       res.json({
         ...(await readProducts(req)),
@@ -3158,7 +3162,6 @@ app.post("/api/products/recalculate", async (req, res, next) => {
       return;
     }
 
-    const shopId = requestShopId(req);
     const result = await enqueueShopStoreWrite(shopId, async () => {
       const current = await readLocalProducts(shopId);
       const catalogResult = await enrichRowsWithProductCatalog(recalculateProductsWithSettings(current, settings), settings);

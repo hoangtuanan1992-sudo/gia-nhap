@@ -2537,6 +2537,30 @@ function resolveSalePrice(row) {
       );
       setSettingsStatus("Đã lưu cài đặt.");
       setSheetSettingsStatus(payload.sheetsConfigured ? "Đã lưu và kiểm tra được Google Sheets." : "");
+      if (payload.sheetsConfigured) {
+        try {
+          const recalcResponse = await authFetch("/api/products/recalculate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ settings })
+          });
+          const recalcPayload = await parseResponsePayload(recalcResponse);
+          if (!recalcResponse.ok) {
+            throw new Error(recalcPayload.error || "Khong cap nhat lai duoc Google Sheets.");
+          }
+          if (Array.isArray(recalcPayload.rows)) {
+            setRows(recalcPayload.rows);
+          }
+          setStatus(recalcPayload.warning || "Da cap nhat lai Google Sheets.");
+        } catch (recalcError) {
+          setSheetSettingsStatus(
+            `Da luu va kiem tra duoc Google Sheets, nhung chua cap nhat lai du lieu: ${humanizeApiError(
+              recalcError.message,
+              selectedProvider
+            )}`
+          );
+        }
+      }
     } catch (error) {
       const message = humanizeApiError(error.message, selectedProvider);
       setSettingsStatus(message);
