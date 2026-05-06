@@ -191,9 +191,9 @@ function productFromStructuredRow(row = {}) {
   return {
     productCode: clean(row.productCode),
     productName: clean(row.productName),
-    purchasePrice: clean(row.purchasePrice),
-    minPrice: clean(row.minPrice),
-    salePrice: clean(row.salePrice),
+    purchasePrice: normalizePrice(row.purchasePrice, { assumeThousands: true }),
+    minPrice: normalizePrice(row.minPrice, { assumeThousands: true }),
+    salePrice: normalizePrice(row.salePrice, { assumeThousands: true }),
     webLink: clean(row.webLink),
     supplier: clean(row.supplier),
     supplierStock: clean(row.supplierStock),
