@@ -1406,6 +1406,45 @@ function findCatalogNameCandidates(row = {}, products = [], limit = 8) {
     .slice(0, limit);
 }
 
+function findCatalogProductByCode(row = {}, products = []) {
+  const codeToken = normalizeAlphaNum(row.productCode);
+  if (!codeToken || codeToken.length < 4) {
+    return null;
+  }
+
+  for (const product of products) {
+    if (product.codeToken && product.codeToken === codeToken) {
+      return product;
+    }
+  }
+
+  if (codeToken.length < 5) {
+    return null;
+  }
+
+  let best = null;
+  let bestScore = 0;
+  for (const product of products) {
+    let score = 0;
+    if (product.codeToken && product.codeToken.includes(codeToken)) {
+      score = 90;
+    } else if (product.codeToken && codeToken.includes(product.codeToken) && product.codeToken.length >= 5) {
+      score = 70;
+    } else if (product.nameToken && product.nameToken.includes(codeToken)) {
+      score = 60;
+    } else if (product.urlToken && product.urlToken.includes(codeToken)) {
+      score = 50;
+    }
+
+    if (score > bestScore) {
+      best = product;
+      bestScore = score;
+    }
+  }
+
+  return bestScore >= 50 ? best : null;
+}
+
 function applyCatalogProductToRow(row = {}, product = null) {
   if (!product) {
     return {
@@ -1425,15 +1464,49 @@ function applyCatalogProductToRow(row = {}, product = null) {
   };
 }
 
-function enrichRowsWithProductCatalogManual(rows = [], products = []) {
+function applyCatalogProductNameToRow(row = {}, product = null) {
+  if (!product) {
+    return applyCatalogProductToRow(row, product);
+  }
+
+  return {
+    ...row,
+    productName: clean(product.name) || clean(row.productName),
+    webLink: product.url
+  };
+}
+
+function prefillRowsWithCatalogCodeMatches(rows = [], products = []) {
+  const matchedIndexes = new Set();
   let matched = 0;
-  const nextRows = rows.map((row) => {
+  const nextRows = rows.map((row, index) => {
+    const match = findCatalogProductByCode(row, products);
+    if (!match) {
+      return row;
+    }
+
+    matched += 1;
+    matchedIndexes.add(index);
+    return applyCatalogProductNameToRow(row, match);
+  });
+
+  return { rows: nextRows, matched, matchedIndexes };
+}
+
+function enrichRowsWithProductCatalogManual(rows = [], products = []) {
+  const prefilled = prefillRowsWithCatalogCodeMatches(rows, products);
+  let matched = prefilled.matched;
+  const nextRows = prefilled.rows.map((row, index) => {
+    if (prefilled.matchedIndexes.has(index)) {
+      return row;
+    }
+
     const match = findCatalogProduct(row, products);
     if (match) {
       matched += 1;
     }
 
-    return applyCatalogProductToRow(row, match);
+    return applyCatalogProductNameToRow(row, match);
   });
 
   return { rows: nextRows, matched, warning: "" };
@@ -1448,16 +1521,24 @@ async function enrichRowsWithProductCatalogAi(rows = [], products = [], settings
     };
   }
 
-  const candidateGroups = rows
-    .map((row) => ({
+  const prefilled = prefillRowsWithCatalogCodeMatches(rows, products);
+  const candidateGroups = prefilled.rows
+    .map((row, index) => ({
+      index,
       row,
       codeKey: normalizeLookupKey(row.productCode),
       candidates: findCatalogNameCandidates(row, products, 8)
     }))
-    .filter((group) => group.codeKey && group.candidates.length);
+    .filter((group) => !prefilled.matchedIndexes.has(group.index) && group.codeKey && group.candidates.length);
 
   if (!candidateGroups.length) {
-    return { rows: rows.map((row) => ({ ...row, webLink: "" })), matched: 0, warning: "" };
+    return {
+      rows: prefilled.rows.map((row, index) =>
+        prefilled.matchedIndexes.has(index) ? row : { ...row, webLink: "" }
+      ),
+      matched: prefilled.matched,
+      warning: ""
+    };
   }
 
   const byCode = new Map();
@@ -1516,8 +1597,12 @@ async function enrichRowsWithProductCatalogAi(rows = [], products = [], settings
     }
   }
 
-  let matched = 0;
-  const nextRows = rows.map((row) => {
+  let matched = prefilled.matched;
+  const nextRows = prefilled.rows.map((row, index) => {
+    if (prefilled.matchedIndexes.has(index)) {
+      return row;
+    }
+
     const codeKey = normalizeLookupKey(row.productCode);
     if (!byCode.has(codeKey)) {
       return {
@@ -1531,7 +1616,7 @@ async function enrichRowsWithProductCatalogAi(rows = [], products = [], settings
       matched += 1;
     }
 
-    return applyCatalogProductToRow(row, match);
+    return applyCatalogProductNameToRow(row, match);
   });
 
   return { rows: nextRows, matched, warning: "" };
