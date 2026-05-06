@@ -2262,7 +2262,6 @@ function resolveSalePrice(row) {
         }
       }
       setStatus(payload.warning || `Da them ${payload.rows?.length || 0} dong cho ${supplier?.name || "nha cung cap"}`);
-      await refreshAll();
     } catch (error) {
       updateMessage(processingMessageId, {
         text: error.message || "Có lỗi khi xử lý dữ liệu.",

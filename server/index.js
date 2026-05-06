@@ -2645,50 +2645,31 @@ async function readProducts(req) {
   const shopId = requestShopId(req);
   const shopConfig = getRuntimeForShop(shopId);
   const settings = getAppSettingsForShop(shopId) || {};
-  if (!isSheetsConfigured(shopConfig)) {
-    const localRows = await readLocalProducts(shopId);
-    const catalogResult = await enrichRowsWithProductCatalog(applyKnownProductDetails(localRows), settings);
-    const rows = visibleLocalProductsWithRowIds(catalogResult.rows);
-    const linkCheck = await stripBrokenWebLinks(rows);
+  const requestedSource = clean(req.query?.source).toLowerCase();
+  const forceSheets = ["sheet", "sheets", "google-sheets"].includes(requestedSource);
+
+  if (!forceSheets || !isSheetsConfigured(shopConfig)) {
+    const localRows = applyKnownProductDetails(await readLocalProducts(shopId));
     return {
       source: "local",
-      rows: linkCheck.rows,
-      warning: [
-        catalogResult.warning,
-        linkCheck.removed ? `Da an ${linkCheck.removed} link web khong truy cap duoc.` : ""
-      ]
-        .filter(Boolean)
-        .join(" ")
+      rows: visibleLocalProductsWithRowIds(localRows),
+      warning: ""
     };
   }
 
   try {
     const catalogResult = await enrichRowsWithProductCatalog(sanitizeProductRows(await readSheetProducts(shopConfig)), settings);
-    const linkCheck = await stripBrokenWebLinks(catalogResult.rows);
     return {
       source: "google-sheets",
-      rows: linkCheck.rows,
-      warning: [
-        catalogResult.warning,
-        linkCheck.removed ? `Da an ${linkCheck.removed} link web khong truy cap duoc.` : ""
-      ]
-        .filter(Boolean)
-        .join(" ")
+      rows: visibleLocalProductsWithRowIds(catalogResult.rows),
+      warning: catalogResult.warning || ""
     };
   } catch (error) {
-    const localRows = await readLocalProducts(shopId);
-    const catalogResult = await enrichRowsWithProductCatalog(applyKnownProductDetails(localRows), settings);
-    const rows = visibleLocalProductsWithRowIds(catalogResult.rows);
-    const linkCheck = await stripBrokenWebLinks(rows);
+    const localRows = applyKnownProductDetails(await readLocalProducts(shopId));
     return {
       source: "local",
-      rows: linkCheck.rows,
-      warning: [
-        `Không đọc được Google Sheets: ${error.message}`,
-        linkCheck.removed ? `Da an ${linkCheck.removed} link web khong truy cap duoc.` : ""
-      ]
-        .filter(Boolean)
-        .join(" ")
+      rows: visibleLocalProductsWithRowIds(localRows),
+      warning: `Khong doc duoc Google Sheets: ${error.message}`
     };
   }
 }
@@ -2702,45 +2683,29 @@ async function appendProducts(products, settings = {}, req) {
     return { source: "none", warning: catalogResult.warning || "" };
   }
 
-  let baseRows = sanitizeProductRows(await readLocalProducts(shopId));
-  let sheetReadWarning = "";
-
-  if (isSheetsConfigured(shopConfig)) {
-    try {
-      const sheetRows = sanitizeProductRows(await readSheetProducts(shopConfig));
-      if (sheetRows.length) {
-        baseRows = upsertProductRows(baseRows, sheetRows);
-      }
-    } catch (error) {
-      sheetReadWarning = `Khong doc duoc Google Sheets, da dung bang cuc bo: ${error.message}`;
-    }
-  }
-
+  const baseRows = sanitizeProductRows(await readLocalProducts(shopId));
   const nextRows = upsertProductRows(baseRows, safeProducts);
   await writeLocalProducts(nextRows, shopId);
 
   if (!isSheetsConfigured(shopConfig)) {
-    return { source: "local", warning: catalogResult.warning || "" };
-  }
-
-  try {
-    await syncSheetWorkbookProducts(nextRows, settings, shopConfig);
-    return {
-      source: "google-sheets",
-      warning: [catalogResult.warning, sheetReadWarning].filter(Boolean).join(" ")
-    };
-  } catch (error) {
     return {
       source: "local",
-      warning: [
-        catalogResult.warning,
-        sheetReadWarning,
-        `Da luu bang cuc bo nhung chua ghi duoc Google Sheets: ${error.message}`
-      ]
-        .filter(Boolean)
-        .join(" ")
+      rows: visibleLocalProductsWithRowIds(nextRows),
+      warning: catalogResult.warning || ""
     };
   }
+
+  syncSheetWorkbookProducts(nextRows, settings, shopConfig).catch((error) => {
+    console.warn("Google Sheets background sync failed:", error.message);
+  });
+
+  return {
+    source: "local",
+    rows: visibleLocalProductsWithRowIds(nextRows),
+    warning: [catalogResult.warning, "Da luu cuc bo, dang dong bo Google Sheets phia sau."]
+      .filter(Boolean)
+      .join(" ")
+  };
 }
 
 function getLookupClient(provider, config = runtimeConfig) {
@@ -3179,18 +3144,6 @@ app.post("/api/products/recalculate", async (req, res, next) => {
 
     const shopId = requestShopId(req);
     const shopConfig = getRuntimeForShop(shopId);
-    if (isSheetsConfigured(shopConfig)) {
-      const sheetRows = sanitizeProductRows(await readSheetProducts(shopConfig));
-      const localRows = sanitizeProductRows(await readLocalProducts(shopId));
-      const currentRows = sheetRows.length ? sheetRows : localRows;
-      await syncSheetWorkbookProducts(currentRows, settings, shopConfig);
-      res.json({
-        ...(await readProducts(req)),
-        updated: currentRows.length,
-        warning: "Da cap nhat Google Sheets theo cai dat moi."
-      });
-      return;
-    }
 
     const result = await enqueueShopStoreWrite(shopId, async () => {
       const current = await readLocalProducts(shopId);
@@ -3203,15 +3156,26 @@ app.post("/api/products/recalculate", async (req, res, next) => {
 
       return {
         rows: visibleLocalProductsWithRowIds(next),
-        updated: changed ? next.length : 0
+        updated: changed ? next.length : 0,
+        allRows: next
       };
     });
+
+    if (isSheetsConfigured(shopConfig)) {
+      syncSheetWorkbookProducts(result.allRows, settings, shopConfig).catch((error) => {
+        console.warn("Google Sheets background sync failed:", error.message);
+      });
+    }
 
     res.json({
       source: "local",
       rows: result.rows,
       updated: result.updated,
-      warning: result.updated ? "Da cap nhat bang cuc bo theo cai dat moi." : ""
+      warning: isSheetsConfigured(shopConfig)
+        ? "Da cap nhat bang cuc bo, dang dong bo Google Sheets phia sau."
+        : result.updated
+          ? "Da cap nhat bang cuc bo theo cai dat moi."
+          : ""
     });
   } catch (error) {
     next(error);
@@ -3222,7 +3186,7 @@ app.post("/api/products", async (req, res, next) => {
   try {
     const rows = Array.isArray(req.body?.rows) ? sanitizeProductRows(req.body.rows) : [];
     const appendResult = await appendProducts(rows, req.body?.settings || getAppSettingsForShop(requestShopId(req)) || {}, req);
-    res.json({ source: appendResult.source, rows, warning: appendResult.warning || "" });
+    res.json({ source: appendResult.source, rows: appendResult.rows || rows, warning: appendResult.warning || "" });
   } catch (error) {
     next(error);
   }
