@@ -22,7 +22,6 @@ import {
 import { loadRuntimeConfig, runtimeConfig, saveRuntimeConfig } from "./runtimeConfig.js";
 
 dotenv.config();
-await loadRuntimeConfig();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -3371,11 +3370,19 @@ app.use((error, _req, res, _next) => {
   });
 });
 
-const compactedRows = await compactLocalProducts();
-if (compactedRows > 0) {
-  console.log(`Compacted ${compactedRows} duplicate local product rows.`);
+async function startServer() {
+  await loadRuntimeConfig();
+  const compactedRows = await compactLocalProducts();
+  if (compactedRows > 0) {
+    console.log(`Compacted ${compactedRows} duplicate local product rows.`);
+  }
+
+  app.listen(PORT, () => {
+    console.log(`API server listening on http://127.0.0.1:${PORT}`);
+  });
 }
 
-app.listen(PORT, () => {
-  console.log(`API server listening on http://127.0.0.1:${PORT}`);
+startServer().catch((error) => {
+  console.error(error);
+  process.exit(1);
 });
