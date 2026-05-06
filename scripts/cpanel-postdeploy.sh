@@ -6,9 +6,15 @@ cd "$APP_DIR"
 
 echo "Starting cPanel deployment in $APP_DIR"
 
+APP_NAME="$(basename "$APP_DIR")"
+NODE_BIN="$(find "$HOME/nodevenv/$APP_NAME" -path "*/bin" -type d 2>/dev/null | sort -Vr | head -n 1)"
+if [ -n "$NODE_BIN" ]; then
+  export PATH="$NODE_BIN:$PATH"
+fi
+
 if ! command -v npm >/dev/null 2>&1; then
   echo "npm was not found in this deploy shell."
-  echo "Open cPanel -> Setup Node.js App -> Run NPM Install, then run: npm run build"
+  echo "Open cPanel Terminal and run the cPanel build commands manually."
   exit 0
 fi
 
@@ -21,4 +27,7 @@ else
   echo "MySQL env is not configured, skipping db:migrate."
 fi
 
-echo "Deployment finished. Restart the Node.js app in cPanel if it did not restart automatically."
+mkdir -p tmp
+touch tmp/restart.txt
+
+echo "Deployment finished."
