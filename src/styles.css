@@ -908,6 +908,30 @@ select:focus {
   gap: 12px;
 }
 
+.supplier-update-mode {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.supplier-update-mode-button {
+  min-height: 42px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffefa;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.supplier-update-mode-button.active {
+  border-color: #80cfc8;
+  background: #e7f8f5;
+  color: #005d59;
+}
+
 .model-row {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) auto;

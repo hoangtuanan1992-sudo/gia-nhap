@@ -194,11 +194,17 @@ function normalizeSupplierShape(supplier = {}, fallbackId = "") {
   return {
     id: supplier.id || fallbackId,
     name: supplier.name || "",
+    updateMode: supplier.updateMode === "full" ? "full" : "partial",
     workflowRule: supplier.workflowRule || "",
     giftRule: supplier.giftRule || "",
     productMatchRules: compactProductMatchRules(supplier.productMatchRules || "")
   };
 }
+
+const supplierUpdateModes = [
+  { id: "partial", label: "Cập nhật một phần" },
+  { id: "full", label: "Cập nhật toàn bộ" }
+];
 
 const defaultSuppliers = supplierNamesFromWorkbook.map((name, index) =>
   normalizeSupplierShape(
@@ -1658,6 +1664,8 @@ function resolveSalePrice(row) {
       suppliers: (settings.suppliers || []).map((supplier) => ({
         id: supplier.id,
         name: supplier.name,
+        updateMode: supplier.updateMode || "partial",
+        workflowRule: supplier.workflowRule || "",
         giftRule: supplier.giftRule || "",
         productMatchRules: supplier.productMatchRules || ""
       }))
@@ -3387,6 +3395,26 @@ function resolveSalePrice(row) {
                           updateSupplier(selectedSettingsSupplier.id, "name", event.target.value)
                         }
                       />
+                    </label>
+
+                    <label className="field">
+                      <span>Kiểu cập nhật dữ liệu</span>
+                      <div className="supplier-update-mode" role="radiogroup" aria-label="Kiểu cập nhật dữ liệu">
+                        {supplierUpdateModes.map((mode) => (
+                          <button
+                            className={`supplier-update-mode-button ${
+                              (selectedSettingsSupplier.updateMode || "partial") === mode.id ? "active" : ""
+                            }`}
+                            type="button"
+                            role="radio"
+                            aria-checked={(selectedSettingsSupplier.updateMode || "partial") === mode.id}
+                            onClick={() => updateSupplier(selectedSettingsSupplier.id, "updateMode", mode.id)}
+                            key={mode.id}
+                          >
+                            {mode.label}
+                          </button>
+                        ))}
+                      </div>
                     </label>
 
                     <label className="field">
