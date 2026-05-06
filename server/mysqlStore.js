@@ -7,9 +7,12 @@ function clean(value) {
 
 let pool = null;
 let schemaReady = false;
+let mysqlDisabledReason = "";
 
 export function isMysqlConfigured() {
-  return Boolean(clean(process.env.DB_HOST) && clean(process.env.DB_NAME) && clean(process.env.DB_USER));
+  return Boolean(
+    !mysqlDisabledReason && clean(process.env.DB_HOST) && clean(process.env.DB_NAME) && clean(process.env.DB_USER)
+  );
 }
 
 function mysqlConfig() {
@@ -20,9 +23,23 @@ function mysqlConfig() {
     user: clean(process.env.DB_USER),
     password: String(process.env.DB_PASSWORD || ""),
     waitForConnections: true,
-    connectionLimit: Number(process.env.DB_CONNECTION_LIMIT || 10),
+    connectionLimit: Number(process.env.DB_CONNECTION_LIMIT || 2),
     charset: "utf8mb4"
   };
+}
+
+function disableMysql(error) {
+  mysqlDisabledReason = error?.message || "MySQL is unavailable";
+  schemaReady = false;
+  if (pool) {
+    pool.end().catch(() => {});
+    pool = null;
+  }
+  console.warn(`MySQL unavailable, falling back to local JSON store: ${mysqlDisabledReason}`);
+}
+
+function safeRollback(connection) {
+  return connection?.rollback?.().catch(() => {});
 }
 
 export function getMysqlPool() {
@@ -47,40 +64,45 @@ export async function initMysqlSchema() {
     return true;
   }
 
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS app_runtime (
-      config_key VARCHAR(64) PRIMARY KEY,
-      config_json LONGTEXT NOT NULL,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-  `);
+  try {
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS app_runtime (
+        config_key VARCHAR(64) PRIMARY KEY,
+        config_json LONGTEXT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
 
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS accounts (
-      id VARCHAR(64) PRIMARY KEY,
-      username VARCHAR(191) NOT NULL UNIQUE,
-      display_name VARCHAR(255) NOT NULL,
-      role VARCHAR(32) NOT NULL,
-      shop_id VARCHAR(64) NULL,
-      shop_name VARCHAR(255) NULL,
-      active TINYINT(1) NOT NULL DEFAULT 1,
-      password_hash TEXT NOT NULL,
-      created_at VARCHAR(64) NULL,
-      updated_at VARCHAR(64) NULL,
-      INDEX idx_accounts_shop_id (shop_id),
-      INDEX idx_accounts_role (role)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-  `);
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS accounts (
+        id VARCHAR(64) PRIMARY KEY,
+        username VARCHAR(191) NOT NULL UNIQUE,
+        display_name VARCHAR(255) NOT NULL,
+        role VARCHAR(32) NOT NULL,
+        shop_id VARCHAR(64) NULL,
+        shop_name VARCHAR(255) NULL,
+        active TINYINT(1) NOT NULL DEFAULT 1,
+        password_hash TEXT NOT NULL,
+        created_at VARCHAR(64) NULL,
+        updated_at VARCHAR(64) NULL,
+        INDEX idx_accounts_shop_id (shop_id),
+        INDEX idx_accounts_role (role)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
 
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS products (
-      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-      shop_id VARCHAR(64) NOT NULL,
-      row_json LONGTEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      INDEX idx_products_shop_id_id (shop_id, id)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-  `);
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS products (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        shop_id VARCHAR(64) NOT NULL,
+        row_json LONGTEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_products_shop_id_id (shop_id, id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+  } catch (error) {
+    disableMysql(error);
+    return false;
+  }
 
   schemaReady = true;
   return true;
@@ -91,16 +113,21 @@ export async function readRuntimeConfigFromMysql() {
     return null;
   }
 
-  const db = getMysqlPool();
-  const [rows] = await db.query("SELECT config_json FROM app_runtime WHERE config_key = 'runtime' LIMIT 1");
-  const raw = rows?.[0]?.config_json;
-  if (!raw) {
-    return null;
-  }
-
   try {
-    return JSON.parse(raw);
-  } catch {
+    const db = getMysqlPool();
+    const [rows] = await db.query("SELECT config_json FROM app_runtime WHERE config_key = 'runtime' LIMIT 1");
+    const raw = rows?.[0]?.config_json;
+    if (!raw) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  } catch (error) {
+    disableMysql(error);
     return null;
   }
 }
@@ -110,16 +137,21 @@ export async function writeRuntimeConfigToMysql(config) {
     return false;
   }
 
-  const db = getMysqlPool();
-  await db.query(
-    `
-      INSERT INTO app_runtime (config_key, config_json)
-      VALUES ('runtime', ?)
-      ON DUPLICATE KEY UPDATE config_json = VALUES(config_json)
-    `,
-    [JSON.stringify(config || {})]
-  );
-  return true;
+  try {
+    const db = getMysqlPool();
+    await db.query(
+      `
+        INSERT INTO app_runtime (config_key, config_json)
+        VALUES ('runtime', ?)
+        ON DUPLICATE KEY UPDATE config_json = VALUES(config_json)
+      `,
+      [JSON.stringify(config || {})]
+    );
+    return true;
+  } catch (error) {
+    disableMysql(error);
+    return false;
+  }
 }
 
 export async function readAccountsFromMysql() {
@@ -127,20 +159,25 @@ export async function readAccountsFromMysql() {
     return null;
   }
 
-  const db = getMysqlPool();
-  const [rows] = await db.query("SELECT * FROM accounts ORDER BY created_at ASC, username ASC");
-  return rows.map((row) => ({
-    id: row.id,
-    username: row.username,
-    displayName: row.display_name,
-    role: row.role,
-    shopId: row.shop_id || "",
-    shopName: row.shop_name || "",
-    active: row.active !== 0,
-    passwordHash: row.password_hash,
-    createdAt: row.created_at || "",
-    updatedAt: row.updated_at || ""
-  }));
+  try {
+    const db = getMysqlPool();
+    const [rows] = await db.query("SELECT * FROM accounts ORDER BY created_at ASC, username ASC");
+    return rows.map((row) => ({
+      id: row.id,
+      username: row.username,
+      displayName: row.display_name,
+      role: row.role,
+      shopId: row.shop_id || "",
+      shopName: row.shop_name || "",
+      active: row.active !== 0,
+      passwordHash: row.password_hash,
+      createdAt: row.created_at || "",
+      updatedAt: row.updated_at || ""
+    }));
+  } catch (error) {
+    disableMysql(error);
+    return null;
+  }
 }
 
 export async function writeAccountsToMysql(accounts = []) {
@@ -148,9 +185,10 @@ export async function writeAccountsToMysql(accounts = []) {
     return false;
   }
 
-  const db = getMysqlPool();
-  const connection = await db.getConnection();
+  let connection = null;
   try {
+    const db = getMysqlPool();
+    connection = await db.getConnection();
     await connection.beginTransaction();
     await connection.query("DELETE FROM accounts");
     if (accounts.length) {
@@ -179,10 +217,11 @@ export async function writeAccountsToMysql(accounts = []) {
     await connection.commit();
     return true;
   } catch (error) {
-    await connection.rollback();
-    throw error;
+    await safeRollback(connection);
+    disableMysql(error);
+    return false;
   } finally {
-    connection.release();
+    connection?.release?.();
   }
 }
 
@@ -191,20 +230,25 @@ export async function readProductsFromMysql(shopId = "admin") {
     return null;
   }
 
-  const db = getMysqlPool();
-  const [rows] = await db.query("SELECT row_json FROM products WHERE shop_id = ? ORDER BY id ASC", [
-    clean(shopId) || "admin"
-  ]);
+  try {
+    const db = getMysqlPool();
+    const [rows] = await db.query("SELECT row_json FROM products WHERE shop_id = ? ORDER BY id ASC", [
+      clean(shopId) || "admin"
+    ]);
 
-  return rows
-    .map((row) => {
-      try {
-        return JSON.parse(row.row_json);
-      } catch {
-        return null;
-      }
-    })
-    .filter(Boolean);
+    return rows
+      .map((row) => {
+        try {
+          return JSON.parse(row.row_json);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  } catch (error) {
+    disableMysql(error);
+    return null;
+  }
 }
 
 export async function writeProductsToMysql(shopId = "admin", products = []) {
@@ -212,10 +256,11 @@ export async function writeProductsToMysql(shopId = "admin", products = []) {
     return false;
   }
 
-  const db = getMysqlPool();
-  const connection = await db.getConnection();
+  let connection = null;
   const safeShopId = clean(shopId) || "admin";
   try {
+    const db = getMysqlPool();
+    connection = await db.getConnection();
     await connection.beginTransaction();
     await connection.query("DELETE FROM products WHERE shop_id = ?", [safeShopId]);
     if (products.length) {
@@ -227,10 +272,11 @@ export async function writeProductsToMysql(shopId = "admin", products = []) {
     await connection.commit();
     return true;
   } catch (error) {
-    await connection.rollback();
-    throw error;
+    await safeRollback(connection);
+    disableMysql(error);
+    return false;
   } finally {
-    connection.release();
+    connection?.release?.();
   }
 }
 

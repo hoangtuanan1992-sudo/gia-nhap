@@ -342,35 +342,9 @@ function normalizeAccountShape(account = {}) {
 }
 
 async function ensureAccountsStore() {
-  if (isMysqlConfigured()) {
-    await initMysqlSchema();
-    const accounts = await readAccountsFromMysql();
-    if (accounts?.length) {
-      return;
-    }
-
+  const createDefaultAdmin = () => {
     const now = new Date().toISOString();
-    await writeAccountsToMysql([
-      {
-        id: randomUUID(),
-        username: "admin",
-        displayName: "Admin",
-        role: "admin",
-        active: true,
-        passwordHash: hashPassword(process.env.DEFAULT_ADMIN_PASSWORD || "admin123"),
-        createdAt: now,
-        updatedAt: now
-      }
-    ]);
-    return;
-  }
-
-  await fs.mkdir(dataDir, { recursive: true });
-  try {
-    await fs.access(accountsFile);
-  } catch {
-    const now = new Date().toISOString();
-    const defaultAdmin = {
+    return {
       id: randomUUID(),
       username: "admin",
       displayName: "Admin",
@@ -380,7 +354,28 @@ async function ensureAccountsStore() {
       createdAt: now,
       updatedAt: now
     };
-    await fs.writeFile(accountsFile, `${JSON.stringify([defaultAdmin], null, 2)}\n`, "utf8");
+  };
+
+  if (isMysqlConfigured()) {
+    const schemaReadyForMysql = await initMysqlSchema();
+    if (schemaReadyForMysql) {
+      const accounts = await readAccountsFromMysql();
+      if (accounts?.length) {
+        return;
+      }
+
+      const savedToMysql = await writeAccountsToMysql([createDefaultAdmin()]);
+      if (savedToMysql) {
+        return;
+      }
+    }
+  }
+
+  await fs.mkdir(dataDir, { recursive: true });
+  try {
+    await fs.access(accountsFile);
+  } catch {
+    await fs.writeFile(accountsFile, `${JSON.stringify([createDefaultAdmin()], null, 2)}\n`, "utf8");
   }
 }
 
@@ -388,7 +383,9 @@ async function readAccounts() {
   await ensureAccountsStore();
   if (isMysqlConfigured()) {
     const accounts = await readAccountsFromMysql();
-    return Array.isArray(accounts) ? accounts.map(normalizeAccountShape) : [];
+    if (Array.isArray(accounts)) {
+      return accounts.map(normalizeAccountShape);
+    }
   }
 
   try {
@@ -406,8 +403,10 @@ async function readAccounts() {
 
 async function writeAccounts(accounts = []) {
   if (isMysqlConfigured()) {
-    await writeAccountsToMysql(accounts.map(normalizeAccountShape));
-    return;
+    const savedToMysql = await writeAccountsToMysql(accounts.map(normalizeAccountShape));
+    if (savedToMysql) {
+      return;
+    }
   }
 
   await ensureAccountsStore();
@@ -1045,8 +1044,10 @@ function getGrokClient(apiKey = runtimeConfig.apiKeys.grok) {
 
 async function ensureLocalStore(shopId = "admin") {
   if (isMysqlConfigured()) {
-    await initMysqlSchema();
-    return;
+    const schemaReadyForMysql = await initMysqlSchema();
+    if (schemaReadyForMysql) {
+      return;
+    }
   }
 
   await fs.mkdir(dataDir, { recursive: true });
@@ -1062,7 +1063,9 @@ async function readLocalProducts(shopId = "admin") {
   await ensureLocalStore(shopId);
   if (isMysqlConfigured()) {
     const products = await readProductsFromMysql(shopId);
-    return Array.isArray(products) ? products : [];
+    if (Array.isArray(products)) {
+      return products;
+    }
   }
 
   const text = await fs.readFile(productsFileForShop(shopId), "utf8");
@@ -1113,8 +1116,10 @@ async function backupFileIfExists(filePath) {
 
 async function writeLocalProducts(products, shopId = "admin") {
   if (isMysqlConfigured()) {
-    await writeProductsToMysql(shopId, products);
-    return;
+    const savedToMysql = await writeProductsToMysql(shopId, products);
+    if (savedToMysql) {
+      return;
+    }
   }
 
   await ensureLocalStore(shopId);

@@ -133,8 +133,10 @@ async function backupFileIfExists(filePath) {
 
 export async function saveRuntimeConfig() {
   if (isMysqlConfigured()) {
-    await writeRuntimeConfigToMysql(runtimeConfig);
-    return;
+    const savedToMysql = await writeRuntimeConfigToMysql(runtimeConfig);
+    if (savedToMysql) {
+      return;
+    }
   }
 
   await fs.mkdir(dataDir, { recursive: true });
