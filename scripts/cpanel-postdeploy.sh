@@ -14,12 +14,19 @@ fi
 
 if ! command -v npm >/dev/null 2>&1; then
   echo "npm was not found in this deploy shell."
-  echo "Open cPanel Terminal and run the cPanel build commands manually."
-  exit 0
+  echo "Expected a Node.js app environment at: $HOME/nodevenv/$APP_NAME"
+  echo "Open cPanel > Setup Node.js App, make sure the app exists, then run Deploy again."
+  exit 1
 fi
+
+echo "Using node: $(command -v node)"
+echo "Using npm: $(command -v npm)"
 
 npm install
 npm run cpanel:build
+
+echo "Built frontend assets:"
+ls -1 dist/assets 2>/dev/null || true
 
 if [ -n "$DB_HOST" ] && [ -n "$DB_NAME" ] && [ -n "$DB_USER" ]; then
   npm run db:migrate
