@@ -2695,21 +2695,47 @@ async function appendProducts(products, settings = {}, req) {
   const catalogResult = await enrichRowsWithProductCatalog(sanitizeProductRows(products), settings);
   const safeProducts = sanitizeProductRows(catalogResult.rows);
   if (!safeProducts.length) {
-    return "none";
+    return { source: "none", warning: catalogResult.warning || "" };
   }
 
+  let baseRows = sanitizeProductRows(await readLocalProducts(shopId));
+  let sheetReadWarning = "";
+
+  if (isSheetsConfigured(shopConfig)) {
+    try {
+      const sheetRows = sanitizeProductRows(await readSheetProducts(shopConfig));
+      if (sheetRows.length) {
+        baseRows = upsertProductRows(baseRows, sheetRows);
+      }
+    } catch (error) {
+      sheetReadWarning = `Khong doc duoc Google Sheets, da dung bang cuc bo: ${error.message}`;
+    }
+  }
+
+  const nextRows = upsertProductRows(baseRows, safeProducts);
+  await writeLocalProducts(nextRows, shopId);
+
   if (!isSheetsConfigured(shopConfig)) {
-    await appendLocalProducts(safeProducts, shopId);
-    return "local";
+    return { source: "local", warning: catalogResult.warning || "" };
   }
 
   try {
-    const currentRows = sanitizeProductRows(await readSheetProducts(shopConfig));
-    const nextRows = upsertProductRows(currentRows, safeProducts);
     await syncSheetWorkbookProducts(nextRows, settings, shopConfig);
-    return "google-sheets";
+    return {
+      source: "google-sheets",
+      warning: [catalogResult.warning, sheetReadWarning].filter(Boolean).join(" ")
+    };
   } catch (error) {
-    throw new Error(`Không ghi được Google Sheets: ${error.message}`);
+    return {
+      source: "local",
+      warning: [
+        catalogResult.warning,
+        sheetReadWarning,
+        `Da luu bang cuc bo nhung chua ghi duoc Google Sheets: ${error.message}`
+      ]
+        .filter(Boolean)
+        .join(" ")
+    };
   }
 }
 
@@ -3191,8 +3217,8 @@ app.post("/api/products/recalculate", async (req, res, next) => {
 app.post("/api/products", async (req, res, next) => {
   try {
     const rows = Array.isArray(req.body?.rows) ? sanitizeProductRows(req.body.rows) : [];
-    const source = await appendProducts(rows, req.body?.settings || getAppSettingsForShop(requestShopId(req)) || {}, req);
-    res.json({ source, rows });
+    const appendResult = await appendProducts(rows, req.body?.settings || getAppSettingsForShop(requestShopId(req)) || {}, req);
+    res.json({ source: appendResult.source, rows, warning: appendResult.warning || "" });
   } catch (error) {
     next(error);
   }
@@ -3287,16 +3313,28 @@ app.post("/api/chat", async (req, res, next) => {
     const linkCheck = await stripBrokenWebLinks(rows);
     rows = linkCheck.rows;
     const shouldAutoAdd = settings.autoAdd !== false;
-    const source = shouldAutoAdd ? await appendProducts(rows, settings, req) : "not-saved";
+    const appendResult = shouldAutoAdd
+      ? await appendProducts(rows, settings, req)
+      : { source: "not-saved", warning: "" };
+    const source = appendResult.source;
     const undoable = shouldAutoAdd && source !== "google-sheets";
+    let responseRows = rows;
+    let readBackWarning = "";
+    if (shouldAutoAdd && source !== "none") {
+      const readBack = await readProducts(req);
+      responseRows = Array.isArray(readBack.rows) ? readBack.rows : rows;
+      readBackWarning = readBack.warning || "";
+    }
     const linkWarning = linkCheck.removed
       ? `Da bo ${linkCheck.removed} link web khong truy cap duoc.`
       : "";
-    const warning = [result.warning, catalogResult.warning, linkWarning].filter(Boolean).join(" ");
+    const warning = [result.warning, catalogResult.warning, linkWarning, appendResult.warning, readBackWarning]
+      .filter(Boolean)
+      .join(" ");
 
     res.json({
       reply: result.reply,
-      rows,
+      rows: responseRows,
       batchId: undoable ? batchId : "",
       source,
       warning:

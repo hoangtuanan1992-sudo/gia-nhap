@@ -982,11 +982,8 @@ function highlightMarginRuleText(text = "", query = "") {
 function cheapestRows(sourceRows) {
   const byProduct = new Map();
 
-  for (const row of sourceRows) {
-    const key = productKey(row);
-    if (!key) {
-      continue;
-    }
+  for (const [index, row] of sourceRows.entries()) {
+    const key = productKey(row) || `row-${row.rowId || row.batchId || index}`;
 
     const current = byProduct.get(key);
     if (!current || parsePriceValue(row.purchasePrice) < parsePriceValue(current.purchasePrice)) {
@@ -2246,13 +2243,15 @@ function resolveSalePrice(row) {
         setLastSubmission({ batchId: payload.batchId, message });
       }
       if (Array.isArray(payload.rows) && payload.rows.length) {
-        setRows((current) => [
-          ...current,
-          ...payload.rows.map((row) => ({
-            ...row,
-            rowId: row.rowId || `pending-${crypto.randomUUID()}`
-          }))
-        ]);
+        const payloadRows = payload.rows.map((row) => ({
+          ...row,
+          rowId: row.rowId || `pending-${crypto.randomUUID()}`
+        }));
+        if (payload.source && payload.source !== "not-saved") {
+          setRows(payloadRows);
+        } else {
+          setRows((current) => [...current, ...payloadRows]);
+        }
         const matchCandidate = payload.rows.map((row) => findProductMatchCandidate(row, supplier)).find(Boolean);
         if (matchCandidate) {
           setPendingProductMatch({
