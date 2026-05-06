@@ -93,6 +93,7 @@ const defaultColumnRules = Object.fromEntries(
 const settingsVersion = 6;
 const defaultProductCatalogUrl =
   "https://checkgia.id.vn/san-pham-full?website_url=https://dienmaytienphong.com/&format=json";
+const apiRetryDelays = [600, 1200, 2400];
 
 const supplierNamesFromWorkbook = [
   "Tân Thủy",
@@ -387,16 +388,86 @@ function clampTableColumnWidth(value) {
   return Math.min(maxTableColumnWidth, Math.max(minTableColumnWidth, value));
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function isApiRequest(url) {
+  return String(url || "").startsWith("/api/");
+}
+
+function shouldRetryApiResponse(response, url) {
+  if (!isApiRequest(url)) {
+    return false;
+  }
+
+  const retryableStatusCodes = new Set([408, 425, 429, 500, 502, 503, 504]);
+  if (retryableStatusCodes.has(response.status)) {
+    return true;
+  }
+
+  const contentType = response.headers.get("content-type") || "";
+  return !contentType.toLowerCase().includes("application/json");
+}
+
+async function fetchApiWithRetry(url, options = {}, extraHeaders = {}) {
+  let lastError;
+
+  for (let attempt = 0; attempt <= apiRetryDelays.length; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        ...options,
+        headers: {
+          ...(options.headers || {}),
+          ...extraHeaders
+        }
+      });
+
+      if (attempt < apiRetryDelays.length && shouldRetryApiResponse(response, url)) {
+        await sleep(apiRetryDelays[attempt]);
+        continue;
+      }
+
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= apiRetryDelays.length || !isApiRequest(url)) {
+        throw error;
+      }
+
+      await sleep(apiRetryDelays[attempt]);
+    }
+  }
+
+  throw lastError || new Error("Khong ket noi duoc server.");
+}
+
 async function parseResponsePayload(response) {
+  const contentType = response.headers.get("content-type") || "";
   const rawText = await response.text();
+
   if (!rawText) {
-    throw new Error("Server tra ve du lieu rong. Vui long thu lai.");
+    if (response.ok) {
+      return {};
+    }
+
+    throw new Error(`Server khong tra ve noi dung. HTTP ${response.status}.`);
   }
 
   try {
     return JSON.parse(rawText);
   } catch {
-    throw new Error("Server tra ve du lieu khong hop le. Vui long thu lai.");
+    const compactText = rawText
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const preview = compactText.slice(0, 180);
+    const detail = preview ? ` Noi dung nhan duoc: ${preview}` : "";
+    const typeDetail = contentType ? ` (${contentType})` : "";
+
+    throw new Error(`API khong tra ve JSON hop le. HTTP ${response.status}${typeDetail}.${detail}`);
   }
 }
 
@@ -425,8 +496,8 @@ function humanizeApiError(message, provider = "openai") {
     }
   }
 
-  if (lower.includes("server tra ve du lieu rong") || lower.includes("du lieu khong hop le")) {
-    return "Server dang phan hoi loi. Vui long thu lai sau it phut.";
+  if (lower.includes("api khong tra ve json") || lower.includes("server khong tra ve noi dung")) {
+    return text;
   }
 
   return text || "Da co loi xay ra. Vui long thu lai.";
@@ -1069,13 +1140,7 @@ function App() {
     : {};
 
   async function authFetch(url, options = {}) {
-    return fetch(url, {
-      ...options,
-      headers: {
-        ...(options.headers || {}),
-        ...authHeaders
-      }
-    });
+    return fetchApiWithRetry(url, options, authHeaders);
   }
 
   function persistAuth(nextAuth) {
@@ -1111,7 +1176,7 @@ function App() {
     setLoginStatus("");
 
     try {
-      const response = await fetch("/api/auth/login", {
+      const response = await fetchApiWithRetry("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(loginForm)
@@ -1258,9 +1323,7 @@ function App() {
       }
 
       try {
-        const response = await fetch("/api/auth/me", {
-          headers: { Authorization: `Bearer ${auth.token}` }
-        });
+        const response = await fetchApiWithRetry("/api/auth/me", {}, { Authorization: `Bearer ${auth.token}` });
         const payload = await parseResponsePayload(response);
         if (!cancelled) {
           persistAuth({ token: auth.token, account: payload.account });

@@ -3310,6 +3310,12 @@ app.post("/api/chat", async (req, res, next) => {
   }
 });
 
+app.use("/api", (req, res) => {
+  res.status(404).json({
+    error: `Khong tim thay API: ${req.method} ${req.originalUrl}`
+  });
+});
+
 app.use(express.static(distDir));
 
 app.get(/^(?!\/api).*/, (_req, res) => {
@@ -3318,6 +3324,10 @@ app.get(/^(?!\/api).*/, (_req, res) => {
 
 app.use((error, _req, res, _next) => {
   console.error(error);
+  if (res.headersSent) {
+    return;
+  }
+
   res.status(500).json({
     error: error.message || "Đã có lỗi không xác định."
   });
