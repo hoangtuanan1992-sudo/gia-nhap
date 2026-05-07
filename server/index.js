@@ -560,6 +560,10 @@ function requestShopId(req) {
     return clean(req.headers["x-shop-id"]) || "admin";
   }
 
+  if (req.user?.role === "user") {
+    return clean(req.user?.id) || "default";
+  }
+
   return clean(req.user?.shopId) || clean(req.user?.id) || "default";
 }
 
@@ -3070,7 +3074,7 @@ app.post("/api/accounts", requireAccountManager, async (req, res, next) => {
       updatedAt: now
     };
     accounts.push(account);
-    if (role === "shop") {
+    if (role === "shop" || role === "user") {
       runtimeConfig.shopConfigs = runtimeConfig.shopConfigs || {};
       runtimeConfig.shopConfigs[safeShopId(accountId)] = blankShopRuntimeConfig();
       await ensureLocalStore(accountId);
@@ -3161,8 +3165,18 @@ app.delete("/api/accounts/:accountId", requireAccountManager, async (req, res, n
     }
 
     const deletedShopId = target.role === "shop" ? clean(target.shopId || target.id) : "";
+    const deletedDataShopIds = target.role === "shop" || target.role === "user" ? [clean(target.id)] : [];
     if (deletedShopId) {
-      delete runtimeConfig.shopConfigs?.[safeShopId(deletedShopId)];
+      for (const childAccount of accounts) {
+        if (childAccount.role === "user" && childAccount.shopId === deletedShopId) {
+          deletedDataShopIds.push(clean(childAccount.id));
+        }
+      }
+    }
+    if (deletedDataShopIds.length) {
+      for (const dataShopId of deletedDataShopIds) {
+        delete runtimeConfig.shopConfigs?.[safeShopId(dataShopId)];
+      }
       await saveRuntimeConfig();
     }
     await writeAccounts(

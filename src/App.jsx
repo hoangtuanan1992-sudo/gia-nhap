@@ -276,7 +276,7 @@ function normalizeSavedSettings(saved = {}) {
         )
         .filter((supplier) => supplier.id && supplier.name)
     : [];
-  const suppliers = Array.isArray(saved.suppliers) ? savedSuppliers : defaultSuppliers;
+  const suppliers = Array.isArray(saved.suppliers) ? savedSuppliers : [];
   const activeSupplierId = "";
   const savedColumnRules =
     saved && typeof saved.columnRules === "object" && !Array.isArray(saved.columnRules)
@@ -1063,7 +1063,7 @@ function App() {
   const [settingsSupplierSearch, setSettingsSupplierSearch] = useState("");
   const [marginRuleSearch, setMarginRuleSearch] = useState("");
   const [selectedMatchSupplierId, setSelectedMatchSupplierId] = useState("total");
-  const [selectedSettingsSupplierId, setSelectedSettingsSupplierId] = useState(defaultSuppliers[0].id);
+  const [selectedSettingsSupplierId, setSelectedSettingsSupplierId] = useState("");
   const [draggedSettingsSupplierId, setDraggedSettingsSupplierId] = useState("");
   const [supplierDropTargetId, setSupplierDropTargetId] = useState("");
   const [lastSubmission, setLastSubmission] = useState(loadSavedLastSubmission);
@@ -1380,7 +1380,7 @@ function App() {
           saveLabel: "Lưu tài khoản",
           emptyLabel: "Chưa có tài khoản con."
         };
-  const suppliers = Array.isArray(settings.suppliers) ? settings.suppliers : defaultSuppliers;
+  const suppliers = Array.isArray(settings.suppliers) ? settings.suppliers : [];
   const activeSupplier = suppliers.find((supplier) => supplier.id === settings.activeSupplierId) || null;
   const supplierRequiredMessage = showSupplierRequiredError && !activeSupplier ? "Chua chon NCC" : "";
   const supplierSearchTerm = normalizeSearch(supplierSearch);
@@ -1739,6 +1739,8 @@ function resolveSalePrice(row) {
   useEffect(() => {
     if (!suppliers.some((supplier) => supplier.id === selectedSettingsSupplierId) && suppliers[0]) {
       setSelectedSettingsSupplierId(suppliers[0].id);
+    } else if (!suppliers.length && selectedSettingsSupplierId) {
+      setSelectedSettingsSupplierId("");
     }
   }, [selectedSettingsSupplierId, suppliers]);
 
@@ -2075,16 +2077,22 @@ function resolveSalePrice(row) {
   function deleteSupplier(supplierId) {
     setSettings((current) => {
       const nextSuppliers = (current.suppliers || []).filter((supplier) => supplier.id !== supplierId);
-      const fallbackSupplier = nextSuppliers[0] || defaultSuppliers[0];
-      const nextActiveSupplierId = current.activeSupplierId === supplierId ? "" : current.activeSupplierId;
+      const nextSelectedSupplierId = nextSuppliers[0]?.id || "";
+      const nextActiveSupplierId =
+        current.activeSupplierId === supplierId ||
+        !nextSuppliers.some((supplier) => supplier.id === current.activeSupplierId)
+          ? ""
+          : current.activeSupplierId;
 
       setSelectedSettingsSupplierId((currentSelected) =>
-        currentSelected === supplierId ? fallbackSupplier.id : currentSelected
+        currentSelected === supplierId || !nextSuppliers.some((supplier) => supplier.id === currentSelected)
+          ? nextSelectedSupplierId
+          : currentSelected
       );
 
       return {
         ...current,
-        suppliers: nextSuppliers.length ? nextSuppliers : defaultSuppliers,
+        suppliers: nextSuppliers,
         activeSupplierId: nextActiveSupplierId
       };
     });
