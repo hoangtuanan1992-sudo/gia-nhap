@@ -291,6 +291,95 @@ function upsertProductRows(currentRows = [], incomingRows = []) {
   return next;
 }
 
+function normalizeSupplierKey(value = "") {
+  return foldText(value).replace(/\s+/g, " ").trim();
+}
+
+function supplierConfigForName(settings = {}, supplierName = "") {
+  const supplierKey = normalizeSupplierKey(supplierName);
+  if (!supplierKey || !Array.isArray(settings.suppliers)) {
+    return null;
+  }
+
+  return settings.suppliers.find((supplier) => normalizeSupplierKey(supplier?.name) === supplierKey) || null;
+}
+
+function supplierUpdateModeFromSettings(settings = {}, supplierName = "") {
+  const supplierKey = normalizeSupplierKey(supplierName);
+  const activeSupplier = settings.activeSupplier || {};
+  if (supplierKey && normalizeSupplierKey(activeSupplier.name) === supplierKey) {
+    return activeSupplier.updateMode === "full" ? "full" : "partial";
+  }
+
+  const supplier = supplierConfigForName(settings, supplierName);
+  return supplier?.updateMode === "full" ? "full" : "partial";
+}
+
+function rowsWithDefaultAvailableStock(rows = []) {
+  return sanitizeProductRows(rows).map((row) =>
+    isEmptyCellValue(row.supplierStock) ? { ...row, supplierStock: "Còn nhiều" } : row
+  );
+}
+
+function isOutOfStockValue(value = "") {
+  return foldText(value).includes("het hang");
+}
+
+function applyFullSupplierStockUpdate(currentRows = [], incomingRows = [], settings = {}) {
+  const current = sanitizeProductRows(currentRows);
+  const incoming = rowsWithDefaultAvailableStock(incomingRows);
+  if (!incoming.length) {
+    return { baseRows: current, incomingRows: incoming, markedOutOfStock: 0 };
+  }
+
+  const supplierName = clean(incoming[0]?.supplier) || supplierFromSettings(settings);
+  const supplierKey = normalizeSupplierKey(supplierName);
+  if (!supplierKey || supplierUpdateModeFromSettings(settings, supplierName) !== "full") {
+    return { baseRows: current, incomingRows: incoming, markedOutOfStock: 0 };
+  }
+
+  const incomingKeys = new Set(
+    incoming
+      .filter((row) => normalizeSupplierKey(row.supplier) === supplierKey)
+      .map(productUpsertKey)
+      .filter(Boolean)
+  );
+
+  if (!incomingKeys.size) {
+    return { baseRows: current, incomingRows: incoming, markedOutOfStock: 0 };
+  }
+
+  let markedOutOfStock = 0;
+  const baseRows = current.map((row) => {
+    if (normalizeSupplierKey(row.supplier) !== supplierKey) {
+      return row;
+    }
+
+    const key = productUpsertKey(row);
+    if (!key || incomingKeys.has(key) || isOutOfStockValue(row.supplierStock)) {
+      return row;
+    }
+
+    markedOutOfStock += 1;
+    return { ...row, supplierStock: "Hết hàng" };
+  });
+
+  return { baseRows, incomingRows: incoming, markedOutOfStock };
+}
+
+function mergeIncomingProductRows(currentRows = [], incomingRows = [], settings = {}) {
+  const { baseRows, incomingRows: normalizedIncomingRows, markedOutOfStock } = applyFullSupplierStockUpdate(
+    currentRows,
+    incomingRows,
+    settings
+  );
+
+  return {
+    rows: upsertProductRows(baseRows, normalizedIncomingRows),
+    markedOutOfStock
+  };
+}
+
 function clean(value) {
   return String(value ?? "").trim();
 }
@@ -2787,14 +2876,18 @@ async function appendProducts(products, settings = {}, req) {
   }
 
   const baseRows = sanitizeProductRows(await readLocalProducts(shopId));
-  const nextRows = upsertProductRows(baseRows, safeProducts);
+  const mergeResult = mergeIncomingProductRows(baseRows, safeProducts, settings);
+  const nextRows = mergeResult.rows;
+  const fullUpdateWarning = mergeResult.markedOutOfStock
+    ? `Da chuyen ${mergeResult.markedOutOfStock} san pham khong co trong lan cap nhat sang Het hang.`
+    : "";
   await writeLocalProducts(nextRows, shopId);
 
   if (!isSheetsConfigured(shopConfig)) {
     return {
       source: "local",
       rows: visibleLocalProductsWithRowIds(nextRows),
-      warning: catalogResult.warning || ""
+      warning: [catalogResult.warning, fullUpdateWarning].filter(Boolean).join(" ")
     };
   }
 
@@ -2805,7 +2898,7 @@ async function appendProducts(products, settings = {}, req) {
   return {
     source: "local",
     rows: visibleLocalProductsWithRowIds(nextRows),
-    warning: [catalogResult.warning, "Da luu cuc bo, dang dong bo Google Sheets phia sau."]
+    warning: [catalogResult.warning, fullUpdateWarning, "Da luu cuc bo, dang dong bo Google Sheets phia sau."]
       .filter(Boolean)
       .join(" ")
   };
