@@ -188,16 +188,19 @@ const COLUMN_LABELS = {
 };
 
 function productFromStructuredRow(row = {}) {
+  const productName = repairVietnameseText(row.productName);
+  const productCode = clean(row.productCode) || extractProductCodeFromProductName(productName);
+
   return {
-    productCode: clean(row.productCode),
-    productName: clean(row.productName),
+    productCode,
+    productName,
     purchasePrice: normalizePrice(row.purchasePrice, { assumeThousands: true }),
     minPrice: normalizePrice(row.minPrice, { assumeThousands: true }),
     salePrice: normalizePrice(row.salePrice, { assumeThousands: true }),
     webLink: clean(row.webLink),
-    supplier: clean(row.supplier),
-    supplierStock: clean(row.supplierStock),
-    notes: clean(row.notes),
+    supplier: repairVietnameseText(row.supplier),
+    supplierStock: normalizeSupplierStock(row.supplierStock),
+    notes: repairVietnameseText(row.notes),
     batchId: clean(row.batchId),
     createdAt: clean(row.createdAt)
   };
@@ -382,6 +385,83 @@ function mergeIncomingProductRows(currentRows = [], incomingRows = [], settings 
 
 function clean(value) {
   return String(value ?? "").trim();
+}
+
+function repairVietnameseText(value = "") {
+  let text = clean(value);
+  if (!text) {
+    return "";
+  }
+
+  const replacements = [
+    [/CĂ²n\s+nhiá»u/gi, "Còn nhiều"],
+    [/CÃ²n\s+nhiá»u/gi, "Còn nhiều"],
+    [/C.n\s+nhi.u/gi, "Còn nhiều"],
+    [/Háº¿t\s+hĂ ng/gi, "Hết hàng"],
+    [/H.t\s+h.ng/gi, "Hết hàng"],
+    [/sáº£n\s+pháº©m/gi, "sản phẩm"],
+    [/s.n\s+ph.m/gi, "sản phẩm"],
+    [/QuĂ /gi, "Quà "],
+    [/Qu.\s+(\d+)/gi, "Quà $1"],
+    [/qu.\s+(\d+)/gi, "quà $1"],
+    [/Ä‘/g, "đ"],
+    [/Ä/g, "Đ"],
+    [/Ă¡/g, "á"],
+    [/Ă /g, "à"],
+    [/Ă¢/g, "â"],
+    [/Ăª/g, "ê"],
+    [/Ă´/g, "ô"],
+    [/Æ¡/g, "ơ"],
+    [/Æ°/g, "ư"]
+  ];
+
+  for (const [pattern, replacement] of replacements) {
+    text = text.replace(pattern, replacement);
+  }
+
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function extractProductCodeFromProductName(value = "") {
+  const text = clean(value);
+  if (!text) {
+    return "";
+  }
+
+  const leading = splitLeadingCode(text);
+  if (leading.code) {
+    return leading.code;
+  }
+
+  const candidates = [...text.matchAll(/\b[A-Za-z0-9][A-Za-z0-9/_().-]{2,}\b/g)]
+    .map((match) => match[0])
+    .filter((candidate) => isLikelyProductCode(candidate))
+    .filter((candidate) => !/^\d+[.,]?\d*$/.test(candidate));
+
+  return candidates[0] || "";
+}
+
+function normalizeSupplierStock(value = "") {
+  const text = repairVietnameseText(value);
+  if (!text || isEmptyCellValue(text)) {
+    return "Còn nhiều";
+  }
+
+  const normalized = foldText(text);
+  const pieceMatch = normalized.match(/(?:^|\b)(?:co|con)?\s*(\d+)\s*c\b/);
+  if (pieceMatch) {
+    return `Còn ${pieceMatch[1]} sản phẩm`;
+  }
+
+  if (/^c.n\s+nhi.u$/i.test(text)) {
+    return "Còn nhiều";
+  }
+
+  if (/^h.t\s+h.ng$/i.test(text)) {
+    return "Hết hàng";
+  }
+
+  return text;
 }
 
 function looksLikeBrokenVietnamese(value = "") {
