@@ -23,9 +23,11 @@ echo "Using node: $(command -v node)"
 echo "Using npm: $(command -v npm)"
 
 npm install
+
+echo "Skipping frontend build on cPanel. The committed dist folder will be used."
 npm run cpanel:build
 
-echo "Built frontend assets:"
+echo "Frontend assets available:"
 ls -1 dist/assets 2>/dev/null || true
 
 if [ -n "$DB_HOST" ] && [ -n "$DB_NAME" ] && [ -n "$DB_USER" ]; then

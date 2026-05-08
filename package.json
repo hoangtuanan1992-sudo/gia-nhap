@@ -9,7 +9,7 @@
     "dev:client": "vite --host 127.0.0.1 --port 5173",
     "start": "node app.cjs",
     "build": "vite build",
-    "cpanel:build": "vite build",
+    "cpanel:build": "node scripts/verify-dist.js",
     "db:migrate": "node server/migrate-to-mysql.js",
     "preview": "vite preview --host 127.0.0.1 --port 4173"
   },

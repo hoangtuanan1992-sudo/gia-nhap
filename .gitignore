@@ -1,9 +1,11 @@
 node_modules
-dist
 .vite
 .env
 .env.local
 .env.*.local
 *.log
+.htaccess
+tmp/
+index.vite-source.html
 server/data/*
 !server/data/.gitkeep
