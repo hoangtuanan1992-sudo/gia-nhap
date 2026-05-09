@@ -577,6 +577,33 @@ function parseCurrencyToNumber(value, { assumeThousands = false } = {}) {
   return numeric;
 }
 
+function parseGiftAmount(value = "") {
+  const text = String(value || "").trim();
+  if (!text) {
+    return Number.NaN;
+  }
+
+  const compact = text.replace(/\s+/g, "");
+  const numberMatch = compact.match(/(\d[\d.,]*)/);
+  if (!numberMatch) {
+    return Number.NaN;
+  }
+
+  const hasSeparator = /[.,]/.test(numberMatch[1]);
+  let numeric = Number(numberMatch[1].replace(/[.,]/g, ""));
+  if (!Number.isFinite(numeric)) {
+    return Number.NaN;
+  }
+
+  if (/k$/i.test(compact)) {
+    numeric *= 1000;
+  } else if (!hasSeparator && numeric > 0 && numeric < 10000) {
+    numeric *= 1000;
+  }
+
+  return numeric;
+}
+
 function formatCurrency(value) {
   return Number.isFinite(value) ? value.toLocaleString("vi-VN") : "";
 }
@@ -587,7 +614,7 @@ function displayCurrency(value) {
 }
 
 function normalizeGiftRuleCode(value = "") {
-  return normalizeSearch(value).replace(/\s+/g, "").toUpperCase();
+  return normalizeSearch(value).replace(/đ/g, "d").replace(/\s+/g, "").toUpperCase();
 }
 
 function parseGiftRuleAmounts(value = "") {
@@ -602,7 +629,7 @@ function parseGiftRuleAmounts(value = "") {
       line.match(/^\[?([^\]=:>]+?)\]?\s*(?:=|:|=>|->)\s*(.+)$/) ||
       line.match(/^([^\s=:\]]+)\s+(.+)$/);
     const code = normalizeGiftRuleCode(match?.[1] || "");
-    const amount = parseCurrencyToNumber(match?.[2] || "", { assumeThousands: true });
+    const amount = parseGiftAmount(match?.[2] || "");
     if (code && Number.isFinite(amount) && amount > 0) {
       rules.set(code, amount);
     }
@@ -801,14 +828,40 @@ function giftCodesFromRule(value = "") {
 
   for (const line of lines) {
     const match =
-      line.match(/^\[?([A-Za-z]{1,8}\d{1,5}[A-Za-z0-9]*)\]?\s*(?:=|:|=>|->)\s*(.+)$/) ||
-      line.match(/^([A-Za-z]{1,8}\d{1,5}[A-Za-z0-9]*)\b/);
-    if (match?.[1]) {
-      codes.add(match[1].toUpperCase());
+      line.match(/^\[?([^\]=:>]+?)\]?\s*(?:=|:|=>|->)\s*(.+)$/) ||
+      line.match(/^([^\s=:\]]+)\s+(.+)$/);
+    const code = normalizeGiftRuleCode(match?.[1] || "");
+    if (code) {
+      codes.add(code);
     }
   }
 
   return codes;
+}
+
+const giftPhrasePatterns = [
+  { code: "KM kèm theo", pattern: /\bkm\s*kem\s*theo\b/ },
+  { code: "KM đặc biệt", pattern: /\bkm\s*dac\s*biet\b/ },
+  { code: "Xuất kích", pattern: /\bxuat\s*kich\b/ },
+  { code: "Tặng kèm", pattern: /\btang\s*kem\b/ },
+  { code: "KM", pattern: /\bkm\b(?!\s*(?:kem\s*theo|dac\s*biet))/ },
+  { code: "Quà", pattern: /\bqua\b/ },
+  { code: "XK", pattern: /\bxk\b/ },
+  { code: "FT", pattern: /\bft\b/ }
+];
+
+function addGiftCodeCandidate(codes, seen, code = "") {
+  const displayCode = String(code || "").trim();
+  const key = normalizeGiftRuleCode(displayCode);
+  if (!displayCode || !key || seen.has(key)) {
+    return;
+  }
+
+  seen.add(key);
+  codes.push({
+    code: displayCode,
+    key
+  });
 }
 
 function giftCodesFromMessage(message = "") {
@@ -818,22 +871,22 @@ function giftCodesFromMessage(message = "") {
   const codePattern = /(?:^|[\s,+-])([A-Za-z]{1,8}\d{1,5}[A-Za-z0-9]*)\b/g;
 
   for (const line of String(message || "").split(/\n+/)) {
-    let lastPriceEnd = -1;
-    for (const match of line.matchAll(pricePattern)) {
-      lastPriceEnd = match.index + match[0].length;
-    }
-
-    if (lastPriceEnd < 0) {
+    const firstPrice = [...line.matchAll(pricePattern)][0];
+    if (!firstPrice) {
       continue;
     }
 
-    const tail = line.slice(lastPriceEnd);
-    for (const match of tail.matchAll(codePattern)) {
-      const code = match[1].toUpperCase();
-      if (!seen.has(code)) {
-        seen.add(code);
-        codes.push(code);
+    const tail = line.slice(firstPrice.index + firstPrice[0].length);
+    const normalizedTail = normalizeSearch(tail).replace(/đ/g, "d");
+
+    for (const item of giftPhrasePatterns) {
+      if (item.pattern.test(normalizedTail)) {
+        addGiftCodeCandidate(codes, seen, item.code);
       }
+    }
+
+    for (const match of tail.matchAll(codePattern)) {
+      addGiftCodeCandidate(codes, seen, match[1].toUpperCase());
     }
   }
 
@@ -842,11 +895,12 @@ function giftCodesFromMessage(message = "") {
 
 function findUnknownGiftCode(message, supplier, ignoredCodes = []) {
   const declaredCodes = giftCodesFromRule(supplier?.giftRule);
-  const ignored = new Set(ignoredCodes.map((code) => String(code).toUpperCase()));
-
-  return giftCodesFromMessage(message).find(
-    (code) => !declaredCodes.has(code) && !ignored.has(code)
+  const ignored = new Set(ignoredCodes.map((code) => normalizeGiftRuleCode(code)));
+  const unknownGift = giftCodesFromMessage(message).find(
+    (item) => !declaredCodes.has(item.key) && !ignored.has(item.key)
   );
+
+  return unknownGift?.code || "";
 }
 
 function supplierWithGiftCode(supplier, code, value) {

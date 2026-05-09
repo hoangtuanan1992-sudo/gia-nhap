@@ -690,7 +690,7 @@ function requestShopId(req) {
   }
 
   if (req.user?.role === "user") {
-    return clean(req.user?.id) || "default";
+    return clean(req.user?.shopId) || clean(req.user?.id) || "default";
   }
 
   return clean(req.user?.shopId) || clean(req.user?.id) || "default";
@@ -985,6 +985,33 @@ function parsePriceAmount(value) {
   return Number.isFinite(amount) && amount > 0 ? amount : NaN;
 }
 
+function parseGiftAmount(value) {
+  const text = clean(value);
+  if (!text) {
+    return NaN;
+  }
+
+  const compact = text.replace(/\s+/g, "");
+  const numberMatch = compact.match(/(\d[\d.,]*)/);
+  if (!numberMatch) {
+    return NaN;
+  }
+
+  const hasSeparator = /[.,]/.test(numberMatch[1]);
+  let amount = Number(numberMatch[1].replace(/[.,]/g, ""));
+  if (!Number.isFinite(amount)) {
+    return NaN;
+  }
+
+  if (/k$/i.test(compact)) {
+    amount *= 1000;
+  } else if (!hasSeparator && amount > 0 && amount < 10000) {
+    amount *= 1000;
+  }
+
+  return amount;
+}
+
 function formatPriceAmount(value) {
   return Number.isFinite(value) && value > 0 ? `${value.toLocaleString("vi-VN")} đ` : "";
 }
@@ -1171,7 +1198,7 @@ function resolveGiftDiscountAmount(row = {}, supplierGiftRules = new Map()) {
       continue;
     }
 
-    const amount = parsePriceAmount(rule.value);
+    const amount = parseGiftAmount(rule.value);
     if (Number.isFinite(amount) && amount > 0) {
       return amount;
     }
@@ -2436,6 +2463,51 @@ function splitTableCells(line) {
   return text.split(/\s{2,}/).map(clean);
 }
 
+function priceLinePartsForTrailingCodeCheck(line = "") {
+  const cells = splitTableCells(line).filter(Boolean);
+  if (cells.length >= 2 && isPriceCell(cells[1])) {
+    return {
+      rawName: cells[0],
+      tail: cells.slice(2).join(" ")
+    };
+  }
+
+  const parsed = parseTrailingPriceLine(line);
+  return parsed
+    ? {
+        rawName: parsed.rawName,
+        tail: parsed.tail
+      }
+    : null;
+}
+
+function productCodeAppearsOnlyAfterPrice(message = "", productCode = "") {
+  const code = normalizeLookupKey(productCode);
+  if (!code) {
+    return false;
+  }
+
+  let seenBeforePrice = false;
+  let seenAfterPrice = false;
+
+  for (const line of String(message || "").split(/\r?\n/)) {
+    const parts = priceLinePartsForTrailingCodeCheck(line);
+    if (!parts) {
+      continue;
+    }
+
+    if (normalizeLookupKey(parts.rawName).includes(code)) {
+      seenBeforePrice = true;
+    }
+
+    if (normalizeLookupKey(parts.tail).includes(code)) {
+      seenAfterPrice = true;
+    }
+  }
+
+  return seenAfterPrice && !seenBeforePrice;
+}
+
 function isPriceCell(value) {
   return Boolean(parsePriceCell(value));
 }
@@ -3470,7 +3542,7 @@ app.post("/api/accounts", requireAccountManager, async (req, res, next) => {
       updatedAt: now
     };
     accounts.push(account);
-    if (role === "shop" || role === "user") {
+    if (role === "shop") {
       runtimeConfig.shopConfigs = runtimeConfig.shopConfigs || {};
       runtimeConfig.shopConfigs[safeShopId(accountId)] = blankShopRuntimeConfig();
       await ensureLocalStore(accountId);
@@ -3912,6 +3984,7 @@ app.post("/api/chat", async (req, res, next) => {
         createdAt
       })
     ));
+    rows = rows.filter((row) => !productCodeAppearsOnlyAfterPrice(message, row.productCode));
     rows = applySalePriceVisibility(rows, settings);
     const shouldAutoAdd = settings.autoAdd !== false;
     const appendResult = await appendProducts(rows, settings, req, { persist: shouldAutoAdd });
