@@ -319,9 +319,10 @@ function supplierUpdateModeFromSettings(settings = {}, supplierName = "") {
 }
 
 function rowsWithDefaultAvailableStock(rows = []) {
-  return sanitizeProductRows(rows).map((row) =>
-    isEmptyCellValue(row.supplierStock) ? { ...row, supplierStock: "Còn nhiều" } : row
-  );
+  return sanitizeProductRows(rows).map((row) => ({
+    ...row,
+    supplierStock: normalizeSupplierStock(row.supplierStock)
+  }));
 }
 
 function isOutOfStockValue(value = "") {
@@ -394,6 +395,7 @@ function repairVietnameseText(value = "") {
   }
 
   const replacements = [
+    [/\bCII2n\s+nhiICdbu\b/gi, "Còn nhiều"],
     [/CĂ²n\s+nhiá»u/gi, "Còn nhiều"],
     [/CÃ²n\s+nhiá»u/gi, "Còn nhiều"],
     [/C.n\s+nhi.u/gi, "Còn nhiều"],
@@ -422,6 +424,48 @@ function repairVietnameseText(value = "") {
   return text.replace(/\s+/g, " ").trim();
 }
 
+function normalizeSupplierStockText(value = "") {
+  const text = repairVietnameseText(value);
+  if (!text || isEmptyCellValue(text)) {
+    return "Còn nhiều";
+  }
+
+  const normalized = foldText(text).replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "Còn nhiều";
+  }
+
+  if (
+    normalized === "0" ||
+    /\b0\b/.test(normalized) ||
+    /\b(?:het|out of stock|sold out|khong con|khong co hang)\b/.test(normalized)
+  ) {
+    return "Hết hàng";
+  }
+
+  const pieceMatch = normalized.match(/(?:^|\b)(?:co|con)?\s*(\d+)\s*(?:c|sp|san pham|sanpham)\b/);
+  if (pieceMatch) {
+    const quantity = Number(pieceMatch[1]);
+    return Number.isFinite(quantity) && quantity > 0 ? `Còn ${quantity} sản phẩm` : "Hết hàng";
+  }
+
+  if (
+    /\b(?:con|co)\s+n?hieu\b/.test(normalized) ||
+    normalized.includes("connhieu") ||
+    normalized.includes("co nhieu") ||
+    normalized.includes("nhieu") ||
+    normalized.includes("con hang") ||
+    normalized.includes("co hang") ||
+    normalized.includes("available") ||
+    normalized.includes("instock") ||
+    normalized.includes("in stock")
+  ) {
+    return "Còn nhiều";
+  }
+
+  return "Còn nhiều";
+}
+
 function extractProductCodeFromProductName(value = "") {
   const text = clean(value);
   if (!text) {
@@ -442,26 +486,7 @@ function extractProductCodeFromProductName(value = "") {
 }
 
 function normalizeSupplierStock(value = "") {
-  const text = repairVietnameseText(value);
-  if (!text || isEmptyCellValue(text)) {
-    return "Còn nhiều";
-  }
-
-  const normalized = foldText(text);
-  const pieceMatch = normalized.match(/(?:^|\b)(?:co|con)?\s*(\d+)\s*c\b/);
-  if (pieceMatch) {
-    return `Còn ${pieceMatch[1]} sản phẩm`;
-  }
-
-  if (/^c.n\s+nhi.u$/i.test(text)) {
-    return "Còn nhiều";
-  }
-
-  if (/^h.t\s+h.ng$/i.test(text)) {
-    return "Hết hàng";
-  }
-
-  return text;
+  return normalizeSupplierStockText(value);
 }
 
 function looksLikeBrokenVietnamese(value = "") {
@@ -470,7 +495,7 @@ function looksLikeBrokenVietnamese(value = "") {
     return false;
   }
 
-  return /(?:DDe[0-9a-f]|DD[0-9a-f]{2}|Đ[0-9a-f]{2}|Ä|Ă|Â|�)/i.test(text);
+  return /(?:DDe[0-9a-f]|DD[0-9a-f]{2}|Đ[0-9a-f]{2}|Ä|Ă|Â|�|CII2n|nhiICdbu)/i.test(text);
 }
 
 function safeAssistantReply(value = "", rowCount = 0) {
@@ -2234,18 +2259,7 @@ function isStockNote(value) {
 }
 
 function normalizeStock(value) {
-  const text = clean(value);
-  if (!text) {
-    return "Còn nhiều";
-  }
-
-  const normalized = foldText(text);
-  const pieceMatch = normalized.match(/(?:^|\b)(?:co|con)?\s*(\d+)\s*c\b/);
-  if (pieceMatch) {
-    return `Còn ${pieceMatch[1]} sản phẩm`;
-  }
-
-  return text;
+  return normalizeSupplierStock(value);
 }
 
 function appendNote(...values) {
