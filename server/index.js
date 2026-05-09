@@ -63,6 +63,10 @@ const PROVIDERS = {
     modelOptions: ["grok-4.20-reasoning", "grok-4", "grok-4-fast", "grok-code-fast-1"]
   }
 };
+const DEFAULT_AI_ROUTING_MODE = "supplier-profile";
+const DEFAULT_OPENAI_MINI_MODEL = "gpt-4.1-mini";
+const DEFAULT_OPENAI_STRONG_MODEL = "gpt-4.1";
+const DEFAULT_AI_PROFILE_MIN_LINES = 80;
 
 const app = express();
 
@@ -1369,6 +1373,22 @@ function getRuntimeModel(provider = runtimeConfig.provider, config = runtimeConf
   return config.models?.[normalizedProvider] || providerMeta(normalizedProvider).defaultModel;
 }
 
+function runtimeConfigWithModel(config = runtimeConfig, provider = "openai", model = "") {
+  const normalizedProvider = normalizeProvider(provider);
+  const selectedModel = clean(model);
+  if (!selectedModel) {
+    return config;
+  }
+
+  return {
+    ...config,
+    models: {
+      ...(config.models || {}),
+      [normalizedProvider]: selectedModel
+    }
+  };
+}
+
 function configuredModelOptions(provider = runtimeConfig.provider, extraModels = [], config = runtimeConfig) {
   const normalizedProvider = normalizeProvider(provider);
   return [
@@ -2461,6 +2481,56 @@ function parsePriceCell(value = "") {
   return pattern.test(text) ? text : "";
 }
 
+function parseLeadingPriceSegment(value = "") {
+  const text = clean(value);
+  if (!text) {
+    return null;
+  }
+
+  const pattern = new RegExp(
+    `^\\s*(${priceCellPattern()})(?:(?:\\s*(?:Ä‘|d|vnd))|(?:\\s*k(?=\\s|$)))?(?:\\s*(.*))?$`,
+    "i"
+  );
+  const match = text.match(pattern);
+  if (!match) {
+    return null;
+  }
+
+  const price = parsePriceCell(match[1]);
+  if (!price) {
+    return null;
+  }
+
+  return {
+    price,
+    tail: clean(match[2] || "").replace(/^[.,;:\\-]+|[.,;:]+$/g, "")
+  };
+}
+
+function parseColonPriceLine(line = "") {
+  const text = cleanPriceLine(line);
+  if (!text || text.includes("\t")) {
+    return null;
+  }
+
+  const separatorIndex = text.search(/[:\uFF1A]/);
+  if (separatorIndex < 0) {
+    return null;
+  }
+
+  const rawName = clean(text.slice(0, separatorIndex)).replace(/[:\uFF1A-]+$/g, "").trim();
+  const priceSegment = parseLeadingPriceSegment(text.slice(separatorIndex + 1));
+  if (!rawName || !priceSegment) {
+    return null;
+  }
+
+  return {
+    rawName,
+    price: priceSegment.price,
+    tail: priceSegment.tail
+  };
+}
+
 function parseCodeFirstPriceLine(line = "") {
   const text = cleanPriceLine(line);
   if (!text || text.includes("\t")) {
@@ -2491,6 +2561,11 @@ function parseCodeFirstPriceLine(line = "") {
 }
 
 function parseTrailingPriceLine(line = "") {
+  const colonPrice = parseColonPriceLine(line);
+  if (colonPrice) {
+    return colonPrice;
+  }
+
   const codeFirst = parseCodeFirstPriceLine(line);
   if (codeFirst) {
     return codeFirst;
@@ -2785,6 +2860,197 @@ function supplierFromSettings(settings = {}) {
   return "";
 }
 
+function supplierAiProfileFromSettings(settings = {}, supplierName = "") {
+  const activeSupplier = settings.activeSupplier || {};
+  const activeProfile = clean(activeSupplier.aiProfile);
+  if (activeProfile && (!supplierName || normalizeSupplierKey(activeSupplier.name) === normalizeSupplierKey(supplierName))) {
+    return activeProfile;
+  }
+
+  return clean(supplierConfigForName(settings, supplierName)?.aiProfile);
+}
+
+function nonEmptyLineCount(value = "") {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map(clean)
+    .filter(Boolean).length;
+}
+
+function normalizedNumberSetting(value, fallback) {
+  const numeric = Number.parseInt(value, 10);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
+}
+
+function extractKnownCodesFromMessage(message = "", pattern) {
+  const found = new Set();
+  for (const match of String(message || "").matchAll(pattern)) {
+    const value = clean(match[0]).replace(/\s+/g, "").toUpperCase();
+    if (value) {
+      found.add(value);
+    }
+  }
+  return [...found].slice(0, 12);
+}
+
+function buildSupplierAiProfile(message = "", rows = [], route = {}) {
+  const text = String(message || "");
+  const folded = foldText(text);
+  const lines = text.split(/\r?\n/).map(clean).filter(Boolean);
+  const parsedRows = sanitizeProductRows(rows);
+  const colonPriceLines = lines.filter((line) => parseColonPriceLine(line)).length;
+  const codeFirstLines = lines.filter((line) => parseCodeFirstPriceLine(line)).length;
+  const giftCodes = extractKnownCodesFromMessage(text, /\b(?:XK|FT|KM|MR)\s*\d+[A-Za-z0-9-]*\b/gi);
+  const stockHints = [
+    folded.includes("co it") ? "co it" : "",
+    /\bco\s*\d+\s*c\b/.test(folded) ? "co 1c/2c" : "",
+    /\(\s*\d+\s*(?:bo|cai|chiec|c)\b/.test(folded) ? "so luong trong ngoac" : "",
+    folded.includes("het hang") ? "het hang" : "",
+    folded.includes("dieu hang") ? "dieu hang" : ""
+  ].filter(Boolean);
+  const unitHints = [
+    /\b\d+\s*(?:lit|l)\b/i.test(folded) ? "lit/l" : "",
+    /\b\d+\s*(?:inch|in)\b/i.test(folded) ? "inch" : "",
+    /\b\d+\s*kg\b/i.test(folded) ? "kg" : "",
+    /\b\d+\s*btu\b/i.test(folded) ? "BTU" : ""
+  ].filter(Boolean);
+  const examples = parsedRows
+    .slice(0, 6)
+    .map((row) => `${clean(row.productCode)}=${clean(row.purchasePrice).replace(/\s*d$/i, "")}`)
+    .filter((value) => !value.startsWith("="));
+
+  return [
+    `Tu hoc tu ${lines.length} dong nguon, tach duoc ${parsedRows.length} dong.`,
+    route.model ? `Lan hoc dung model ${route.model}.` : "",
+    colonPriceLines ? `NCC hay ghi gia sau dau ':' (${colonPriceLines} dong); Gia NCC la so dau tien sau dau ':'.` : "",
+    codeFirstLines ? `Cung co dong ma hang roi den gia (${codeFirstLines} dong); Gia NCC la so dau tien ngay sau ma.` : "",
+    "So xuat hien sau gia hoac trong ngoac la ghi chu/ton kho/thong so, khong duoc lay lam Gia NCC.",
+    stockHints.length ? `Cum ton kho hay gap: ${stockHints.join(", ")}.` : "",
+    unitHints.length ? `Don vi thong so hay gap: ${unitHints.join(", ")}; bo qua khi lay gia.` : "",
+    giftCodes.length ? `Ma qua/khuyen mai hay gap: ${giftCodes.join(", ")}; dua vao notes neu chua khai bao gia tri.` : "",
+    examples.length ? `Vi du ma=gia: ${examples.join(", ")}.` : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function settingsWithSupplierAiProfile(settings = {}, supplier = {}, profile = "", model = "") {
+  const supplierId = clean(supplier.id);
+  const supplierName = clean(supplier.name);
+  const supplierKey = normalizeSupplierKey(supplierName);
+  if (!supplierId && !supplierKey) {
+    return settings;
+  }
+
+  const learnedAt = new Date().toISOString();
+  const updateProfile = (item = {}) => ({
+    ...item,
+    aiProfile: profile,
+    aiProfileLearnedAt: learnedAt,
+    aiProfileModel: clean(model)
+  });
+
+  let found = false;
+  const suppliers = (Array.isArray(settings.suppliers) ? settings.suppliers : []).map((item) => {
+    const itemId = clean(item.id);
+    const itemKey = normalizeSupplierKey(item.name);
+    const matched = (supplierId && itemId === supplierId) || (supplierKey && itemKey === supplierKey);
+    if (!matched) {
+      return item;
+    }
+
+    found = true;
+    return updateProfile(item);
+  });
+
+  if (!found && supplierName) {
+    suppliers.push(
+      updateProfile({
+        id: supplierId || `supplier-${randomUUID()}`,
+        name: supplierName,
+        updateMode: supplier.updateMode === "full" ? "full" : "partial",
+        workflowRule: clean(supplier.workflowRule),
+        giftRule: clean(supplier.giftRule),
+        productMatchRules: clean(supplier.productMatchRules)
+      })
+    );
+  }
+
+  return {
+    ...settings,
+    suppliers
+  };
+}
+
+function normalizationLooksIncomplete(result = {}, message = "") {
+  const expectedRows = countLikelySupplierPriceLines(message);
+  const actualRows = Array.isArray(result.rows) ? result.rows.length : 0;
+  return expectedRows >= 20 && actualRows < Math.ceil(expectedRows * 0.7);
+}
+
+async function resolveAiModelRoute({ provider, message, settings = {}, config = runtimeConfig, shopId = "admin" }) {
+  const normalizedProvider = normalizeProvider(provider);
+  const baseModel = getRuntimeModel(normalizedProvider, config);
+  const mode = clean(settings.aiRoutingMode || DEFAULT_AI_ROUTING_MODE);
+
+  if (normalizedProvider !== "openai" || mode === "manual") {
+    return {
+      provider: normalizedProvider,
+      model: baseModel,
+      config,
+      settings,
+      routingApplied: false,
+      shouldLearnProfile: false,
+      canRetryStrong: false,
+      warning: ""
+    };
+  }
+
+  const supplierName = supplierFromSettings(settings);
+  const profile = supplierAiProfileFromSettings(settings, supplierName);
+  const lineCount = nonEmptyLineCount(message);
+  const profileMinLines = normalizedNumberSetting(settings.aiProfileMinLines, DEFAULT_AI_PROFILE_MIN_LINES);
+  const miniModel = clean(settings.aiMiniModel) || DEFAULT_OPENAI_MINI_MODEL;
+  const strongModel = clean(settings.aiStrongModel) || DEFAULT_OPENAI_STRONG_MODEL;
+  let hasSupplierRows = false;
+
+  if (supplierName) {
+    try {
+      const currentRows = await readLocalProducts(shopId);
+      const supplierKey = normalizeSupplierKey(supplierName);
+      hasSupplierRows = currentRows.some((row) => normalizeSupplierKey(row.supplier) === supplierKey);
+    } catch {
+      hasSupplierRows = false;
+    }
+  }
+
+  const shouldLearnProfile = Boolean(supplierName && !profile && (!hasSupplierRows || lineCount >= profileMinLines));
+  const selectedModel = shouldLearnProfile ? strongModel : miniModel;
+  const routedConfig = runtimeConfigWithModel(config, "openai", selectedModel);
+  const routedSettings = {
+    ...settings,
+    forceAiNormalization: shouldLearnProfile
+  };
+  const warning = shouldLearnProfile
+    ? `Tu dong chon ${selectedModel} de hoc format NCC ${supplierName}; lan sau uu tien ${miniModel}.`
+    : profile
+      ? `Tu dong uu tien ${miniModel} vi NCC ${supplierName || "nay"} da co ho so AI.`
+      : `Tu dong uu tien ${miniModel}.`;
+
+  return {
+    provider: normalizedProvider,
+    model: selectedModel,
+    miniModel,
+    strongModel,
+    config: routedConfig,
+    settings: routedSettings,
+    routingApplied: true,
+    shouldLearnProfile,
+    canRetryStrong: settings.aiRetryStrongOnMismatch !== false && selectedModel !== strongModel,
+    warning
+  };
+}
+
 function parseSupplierPriceTable(message, settings = {}) {
   const rows = [];
   let section = "";
@@ -2853,6 +3119,41 @@ function parseSupplierPriceTable(message, settings = {}) {
   }
 
   return rows;
+}
+
+function sourcePriceRowsByCode(message = "", settings = {}) {
+  const byCode = new Map();
+
+  for (const row of parseSupplierPriceTable(message, settings)) {
+    const code = normalizeLookupKey(row.productCode);
+    if (!code || !row.purchasePrice) {
+      continue;
+    }
+
+    byCode.set(code, row);
+  }
+
+  return byCode;
+}
+
+function correctRowsWithSourcePrices(rows = [], message = "", settings = {}) {
+  const sourceRows = sourcePriceRowsByCode(message, settings);
+  if (!sourceRows.size) {
+    return rows;
+  }
+
+  return rows.map((row) => {
+    const code = normalizeLookupKey(row.productCode);
+    const sourceRow = sourceRows.get(code);
+    if (!sourceRow?.purchasePrice) {
+      return row;
+    }
+
+    return {
+      ...row,
+      purchasePrice: sourceRow.purchasePrice
+    };
+  });
 }
 
 function countLikelySupplierPriceLines(message = "") {
@@ -2956,6 +3257,7 @@ function buildInstructions(settings = {}) {
   const activeSupplierName = clean(settings.activeSupplier?.name);
   const supplierWorkflowRule = clean(settings.activeSupplier?.workflowRule);
   const supplierGiftRule = clean(settings.activeSupplier?.giftRule);
+  const supplierAiProfile = supplierAiProfileFromSettings(settings, activeSupplierName);
 
   const instructions = [
     role,
@@ -2970,12 +3272,14 @@ function buildInstructions(settings = {}) {
     activeSupplierName ? `Nhà cung cấp đang chọn: ${activeSupplierName}.` : "",
     supplierWorkflowRule ? `Quy trình NCC riêng cho ${activeSupplierName || "NCC này"}: ${supplierWorkflowRule}` : "",
     supplierGiftRule ? `Quy tắc quà tặng riêng cho ${activeSupplierName || "NCC này"}: ${supplierGiftRule}` : "",
+    supplierAiProfile ? `Ho so AI tu hoc cua NCC ${activeSupplierName || "nay"}:\n${supplierAiProfile}` : "",
     `Quy tắc riêng: ${rules}`,
     `Đơn vị tiền ưu tiên: ${currency}.`,
     columnRuleLines.length ? `Quy tắc theo từng cột:\n${columnRuleLines.join("\n")}` : "",
     "Khong tu suy doan gia tri qua tang/khuyen mai tu ma nhu XK50, FT75 neu quy tac qua tang cua NCC chua khai bao ro.",
     "Neu gap ma qua tang chua khai bao, giu nguyen ma do trong notes; khong chuyen thanh giam tien, khong cong/tru vao gia.",
     "Gia NCC la gia dau tien nam ngay sau ma san pham/ten san pham hoac sau dau ':'. Cac so nam sau ma qua/ghi chu nhu 596 lit, 568 lit, 65 inch, 9 kg, 12000 BTU la thong so, khong phai gia.",
+    "Cac so trong ngoac sau gia nhu (13 bo mau trang), (16 bo mau xam) la ton kho/ghi chu, khong phai Gia NCC.",
     "Ma san pham khong bao gio nam phia sau gia. Cac cum sau gia nhu +MR24, XK100, FT75 la ghi chu/ma qua tang, khong dua vao productCode.",
     "Neu ma san pham truoc gia co hau to nhu RS755WIA-PGV(22)-XK thi giu nguyen ca cum, khong rut gon thanh RS755WIA.",
     webSearchEnabled
@@ -3322,8 +3626,9 @@ async function normalizeChunkedWithProvider(provider, message, settings, images 
     return normalizeProviderWithRetries(provider, message, settings, images, config);
   }
 
+  const forceAiNormalization = settings.forceAiNormalization === true;
   const localRows = parseSupplierPriceTable(message, settings);
-  if (supplierTableParseLooksComplete(message, localRows)) {
+  if (!forceAiNormalization && supplierTableParseLooksComplete(message, localRows)) {
     return {
       reply: `Mình đã tách được ${localRows.length} dòng từ bảng giá nhà cung cấp.`,
       rows: localRows
@@ -4041,8 +4346,9 @@ app.post("/api/chat", async (req, res, next) => {
   try {
     const message = clean(req.body?.message);
     const images = cleanImageInputs(req.body?.images);
-    const shopConfig = getRuntimeForShop(requestShopId(req));
-    const settings = req.body?.settings || getAppSettingsForShop(requestShopId(req)) || {};
+    const shopId = requestShopId(req);
+    const shopConfig = getRuntimeForShop(shopId);
+    const settings = req.body?.settings || getAppSettingsForShop(shopId) || {};
     const provider = normalizeProvider(settings.provider || shopConfig.provider);
 
     if (!message && !images.length) {
@@ -4055,14 +4361,48 @@ app.post("/api/chat", async (req, res, next) => {
       return;
     }
 
+    const modelRoute = await resolveAiModelRoute({
+      provider,
+      message,
+      settings,
+      config: shopConfig,
+      shopId
+    });
+    let effectiveModel = modelRoute.model;
+    let effectiveSettings = modelRoute.settings;
+    let effectiveConfig = modelRoute.config;
+    let modelRouteWarning = modelRoute.warning;
     let result;
     try {
-      result = await normalizeChunkedWithProvider(provider, message, settings, images, shopConfig);
+      result = await normalizeChunkedWithProvider(
+        modelRoute.provider,
+        message,
+        effectiveSettings,
+        images,
+        effectiveConfig
+      );
+
+      if (modelRoute.canRetryStrong && normalizationLooksIncomplete(result, message)) {
+        effectiveModel = modelRoute.strongModel;
+        effectiveSettings = {
+          ...settings,
+          forceAiNormalization: true
+        };
+        effectiveConfig = runtimeConfigWithModel(shopConfig, modelRoute.provider, effectiveModel);
+        result = await normalizeChunkedWithProvider(
+          modelRoute.provider,
+          message,
+          effectiveSettings,
+          images,
+          effectiveConfig
+        );
+        modelRouteWarning = `${modelRouteWarning} Mini tra thieu dong, da goi lai ${effectiveModel}.`;
+      }
     } catch (error) {
-      const providerLabel = providerMeta(provider).label;
+      const providerLabel = providerMeta(modelRoute.provider).label;
       const messageText = isJsonFormatError(error)
         ? `${providerLabel} tra ve JSON loi sau 3 lan thu. Xin thu lai sau hoac doi sang model manh hon.`
-        : humanizeProviderError(provider, error, `${providerLabel} API loi. Xin thu lai sau.`);
+        : humanizeProviderError(modelRoute.provider, error, `${providerLabel} API loi. Xin thu lai sau.`);
       res.status(502).json({ error: messageText });
       return;
     }
@@ -4078,8 +4418,23 @@ app.post("/api/chat", async (req, res, next) => {
         createdAt
       })
     ));
+    rows = correctRowsWithSourcePrices(rows, message, settings);
     rows = rows.filter((row) => !productCodeAppearsOnlyAfterPrice(message, row.productCode));
     rows = applySalePriceVisibility(rows, settings);
+    let updatedSettings = null;
+    if (modelRoute.shouldLearnProfile && rows.length) {
+      const baseSettings = getAppSettingsForShop(shopId) || settings;
+      const learnedProfile = buildSupplierAiProfile(message, rows, { model: effectiveModel });
+      updatedSettings = settingsWithSupplierAiProfile(
+        baseSettings,
+        settings.activeSupplier || supplierConfigForName(baseSettings, activeSupplierName) || {},
+        learnedProfile,
+        effectiveModel
+      );
+      setAppSettingsForShop(shopId, updatedSettings);
+      await saveRuntimeConfig();
+      modelRouteWarning = `${modelRouteWarning} Da luu ho so AI cho NCC ${activeSupplierName}.`;
+    }
     const shouldAutoAdd = settings.autoAdd !== false;
     const appendResult = await appendProducts(rows, settings, req, { persist: shouldAutoAdd });
     const source = appendResult.source;
@@ -4091,7 +4446,7 @@ app.post("/api/chat", async (req, res, next) => {
       responseRows = Array.isArray(readBack.rows) ? readBack.rows : responseRows;
       readBackWarning = readBack.warning || "";
     }
-    const warning = [result.warning, appendResult.warning, readBackWarning]
+    const warning = [modelRouteWarning, result.warning, appendResult.warning, readBackWarning]
       .filter(Boolean)
       .join(" ");
 
@@ -4100,6 +4455,15 @@ app.post("/api/chat", async (req, res, next) => {
       rows: responseRows,
       batchId: undoable ? batchId : "",
       source,
+      modelUsed: effectiveModel,
+      modelRouting: modelRoute.routingApplied
+        ? {
+            mode: settings.aiRoutingMode || DEFAULT_AI_ROUTING_MODE,
+            model: effectiveModel,
+            learnedProfile: Boolean(updatedSettings)
+          }
+        : null,
+      settings: updatedSettings,
       warning:
         warning ||
         (shouldAutoAdd && !undoable

@@ -908,6 +908,10 @@ select:focus {
   gap: 12px;
 }
 
+.supplier-ai-profile-field {
+  grid-column: 1 / -1;
+}
+
 .supplier-update-mode {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -938,6 +942,14 @@ select:focus {
   gap: 12px;
   align-items: end;
   margin-top: 13px;
+}
+
+.ai-routing-toggle {
+  margin-top: 13px;
+}
+
+.ai-routing-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .settings-actions {

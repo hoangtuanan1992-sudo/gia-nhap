@@ -90,7 +90,7 @@ const defaultColumnRules = Object.fromEntries(
   outputColumns.map((column) => [column.id, column.rule])
 );
 
-const settingsVersion = 6;
+const settingsVersion = 7;
 const defaultProductCatalogUrl =
   "https://checkgia.id.vn/san-pham-full?website_url=https://dienmaytienphong.com/&format=json";
 const apiRetryDelays = [600, 1200, 2400];
@@ -197,7 +197,10 @@ function normalizeSupplierShape(supplier = {}, fallbackId = "") {
     updateMode: supplier.updateMode === "full" ? "full" : "partial",
     workflowRule: supplier.workflowRule || "",
     giftRule: supplier.giftRule || "",
-    productMatchRules: compactProductMatchRules(supplier.productMatchRules || "")
+    productMatchRules: compactProductMatchRules(supplier.productMatchRules || ""),
+    aiProfile: supplier.aiProfile || "",
+    aiProfileLearnedAt: supplier.aiProfileLearnedAt || "",
+    aiProfileModel: supplier.aiProfileModel || ""
   };
 }
 
@@ -228,6 +231,11 @@ const defaultSettings = {
   productCatalogMatchMode: "manual",
   suppliers: defaultSuppliers,
   activeSupplierId: "",
+  aiRoutingMode: "supplier-profile",
+  aiMiniModel: "gpt-4.1-mini",
+  aiStrongModel: "gpt-4.1",
+  aiProfileMinLines: 80,
+  aiRetryStrongOnMismatch: true,
   webSearchEnabled: true
 };
 
@@ -292,6 +300,13 @@ function normalizeSavedSettings(saved = {}) {
     productCatalogMatchMode: saved.productCatalogMatchMode === "ai" ? "ai" : "manual",
     suppliers,
     activeSupplierId,
+    aiRoutingMode: saved.aiRoutingMode === "manual" ? "manual" : "supplier-profile",
+    aiMiniModel: saved.aiMiniModel || defaultSettings.aiMiniModel,
+    aiStrongModel: saved.aiStrongModel || defaultSettings.aiStrongModel,
+    aiProfileMinLines: Number.parseInt(saved.aiProfileMinLines, 10) > 0
+      ? Number.parseInt(saved.aiProfileMinLines, 10)
+      : defaultSettings.aiProfileMinLines,
+    aiRetryStrongOnMismatch: saved.aiRetryStrongOnMismatch ?? defaultSettings.aiRetryStrongOnMismatch,
     webSearchEnabled: saved.webSearchEnabled ?? defaultSettings.webSearchEnabled,
     marginRules: saved.marginRules || defaultSettings.marginRules,
     columnRules: {
@@ -313,6 +328,11 @@ function blankShopSettings() {
     productCatalogMatchMode: "manual",
     suppliers: [],
     activeSupplierId: "",
+    aiRoutingMode: "supplier-profile",
+    aiMiniModel: "gpt-4.1-mini",
+    aiStrongModel: "gpt-4.1",
+    aiProfileMinLines: 80,
+    aiRetryStrongOnMismatch: true,
     webSearchEnabled: false
   });
 }
@@ -2448,6 +2468,14 @@ function resolveSalePrice(row) {
         throw new Error(payload.error || "Khong xu ly duoc tin nhan");
       }
 
+      if (payload.settings) {
+        setSettings((current) => {
+          const next = normalizeSavedSettings(payload.settings);
+          next.activeSupplierId = current.activeSupplierId;
+          return next;
+        });
+      }
+
       updateMessage(processingMessageId, {
         text: payload.reply,
         meta: payload.warning || ""
@@ -3227,6 +3255,99 @@ function resolveSalePrice(row) {
               </button>
             </div>
 
+            <label className="toggle-field compact-toggle ai-routing-toggle">
+              <input
+                type="checkbox"
+                checked={selectedProvider === "openai" && settings.aiRoutingMode !== "manual"}
+                disabled={selectedProvider !== "openai"}
+                onChange={(event) =>
+                  setSettings((current) => ({
+                    ...current,
+                    aiRoutingMode: event.target.checked ? "supplier-profile" : "manual"
+                  }))
+                }
+              />
+              <span>Tự động chọn model theo NCC</span>
+            </label>
+
+            {selectedProvider === "openai" && settings.aiRoutingMode !== "manual" ? (
+              <>
+                <div className="settings-grid ai-routing-grid">
+                  <label className="field">
+                    <span>Model lặp lại</span>
+                    <select
+                      value={settings.aiMiniModel || "gpt-4.1-mini"}
+                      onChange={(event) =>
+                        setSettings((current) => ({ ...current, aiMiniModel: event.target.value }))
+                      }
+                    >
+                      {modelOptions.map((model) => (
+                        <option value={model} key={`mini-${model}`}>
+                          {model}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="field">
+                    <span>Model học lần đầu</span>
+                    <select
+                      value={settings.aiStrongModel || "gpt-4.1"}
+                      onChange={(event) =>
+                        setSettings((current) => ({ ...current, aiStrongModel: event.target.value }))
+                      }
+                    >
+                      {modelOptions.map((model) => (
+                        <option value={model} key={`strong-${model}`}>
+                          {model}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <div className="settings-grid ai-routing-grid">
+                  <label className="field">
+                    <span>Ngưỡng học lại</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={settings.aiProfileMinLines || 80}
+                      onChange={(event) =>
+                        setSettings((current) => ({
+                          ...current,
+                          aiProfileMinLines: Number.parseInt(event.target.value, 10) || 80
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label className="toggle-field compact-toggle">
+                    <input
+                      type="checkbox"
+                      checked={settings.aiRetryStrongOnMismatch !== false}
+                      onChange={(event) =>
+                        setSettings((current) => ({
+                          ...current,
+                          aiRetryStrongOnMismatch: event.target.checked
+                        }))
+                      }
+                    />
+                    <span>Gọi model mạnh khi nghi ngờ</span>
+                  </label>
+                </div>
+
+                <small className="field-hint">
+                  NCC chưa có hồ sơ AI sẽ dùng model học lần đầu một lần, lưu cách đọc dữ liệu,
+                  rồi các lần sau ưu tiên model lặp lại.
+                </small>
+              </>
+            ) : (
+              <small className="field-hint">
+                Chế độ tự động hiện áp dụng cho OpenAI. Tắt chế độ này sẽ dùng đúng model đang chọn.
+              </small>
+            )}
+
             <div className="settings-actions">
               <span className={`status-pill ${isProviderConfigured(selectedProvider) ? "ok" : "warn"}`}>
                 {isProviderConfigured(selectedProvider) ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
@@ -3644,6 +3765,24 @@ function resolveSalePrice(row) {
                         rows={4}
                         placeholder="Giải nghĩa quà, XK, xuất kích, ưu đãi, điều kiện mua, cách hiểu ghi chú riêng của NCC này."
                       />
+                    </label>
+
+                    <label className="field supplier-ai-profile-field">
+                      <span>Hồ sơ AI tự học</span>
+                      <textarea
+                        value={selectedSettingsSupplier.aiProfile || ""}
+                        onChange={(event) =>
+                          updateSupplier(selectedSettingsSupplier.id, "aiProfile", event.target.value)
+                        }
+                        rows={5}
+                        placeholder="Sau lần học đầu bằng model mạnh, app sẽ tự điền cách NCC này ghi giá, tồn kho, mã quà và thông số."
+                      />
+                      {selectedSettingsSupplier.aiProfileLearnedAt ? (
+                        <small className="field-hint">
+                          Học lúc {new Date(selectedSettingsSupplier.aiProfileLearnedAt).toLocaleString("vi-VN")}
+                          {selectedSettingsSupplier.aiProfileModel ? ` bằng ${selectedSettingsSupplier.aiProfileModel}` : ""}.
+                        </small>
+                      ) : null}
                     </label>
                   </div>
                 </div>
