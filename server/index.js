@@ -190,7 +190,7 @@ const COLUMN_LABELS = {
 
 function productFromStructuredRow(row = {}) {
   const productName = repairVietnameseText(row.productName);
-  const productCode = clean(row.productCode) || extractProductCodeFromProductName(productName);
+  const productCode = resolveProductCodeFromRow(row.productCode, productName);
 
   return {
     productCode,
@@ -501,12 +501,56 @@ function extractProductCodeFromProductName(value = "") {
     return leading.code;
   }
 
-  const candidates = [...text.matchAll(/[A-Za-z0-9][A-Za-z0-9/_().+-]{2,}/g)]
+  const candidates = productCodeCandidatesFromText(text);
+
+  return candidates[0] || "";
+}
+
+function productCodeCandidatesFromText(value = "") {
+  return [...clean(value).matchAll(/[A-Za-z0-9][A-Za-z0-9/_().+-]{2,}/g)]
     .map((match) => match[0].replace(/^[.,;:]+|[.,;:]+$/g, ""))
     .filter((candidate) => isLikelyProductCode(candidate))
     .filter((candidate) => !/^\d+[.,]?\d*$/.test(candidate));
+}
 
-  return candidates[0] || "";
+function longerCodeFromProductName(baseCode = "", productName = "") {
+  const base = clean(baseCode);
+  if (!base) {
+    return "";
+  }
+
+  const baseKey = base.toUpperCase();
+  const candidates = productCodeCandidatesFromText(productName).sort((left, right) => right.length - left.length);
+
+  for (const candidate of candidates) {
+    const candidateKey = candidate.toUpperCase();
+    const index = candidateKey.indexOf(baseKey);
+    if (index < 0) {
+      continue;
+    }
+
+    const before = candidate[index - 1] || "";
+    const after = candidate[index + base.length] || "";
+    if ((before && /[A-Za-z0-9]/.test(before)) || (after && /[A-Za-z0-9]/.test(after))) {
+      continue;
+    }
+
+    const expanded = candidate.slice(index).replace(/^[.,;:]+|[.,;:]+$/g, "");
+    if (expanded.length > base.length && isLikelyProductCode(expanded)) {
+      return expanded;
+    }
+  }
+
+  return "";
+}
+
+function resolveProductCodeFromRow(productCode = "", productName = "") {
+  const code = clean(productCode);
+  if (code) {
+    return longerCodeFromProductName(code, productName) || code;
+  }
+
+  return extractProductCodeFromProductName(productName);
 }
 
 function normalizeSupplierStock(value = "") {
@@ -1099,6 +1143,20 @@ function normalizeGiftCode(value) {
   return foldText(value).replace(/\s+/g, "").toUpperCase();
 }
 
+function escapeRegExp(value = "") {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function giftTextContainsCode(value = "", code = "") {
+  const text = normalizeGiftCode(value);
+  const key = normalizeGiftCode(code);
+  if (!text || !key) {
+    return false;
+  }
+
+  return new RegExp(`(^|[^A-Z0-9])${escapeRegExp(key)}(?=$|[^A-Z0-9])`).test(text);
+}
+
 function parseGiftRuleValues(value = "") {
   const rules = new Map();
   const lines = String(value || "")
@@ -1125,8 +1183,7 @@ function parseGiftRuleValues(value = "") {
 }
 
 function notesContainGiftCode(notes, code) {
-  const normalizedNotes = normalizeGiftCode(notes);
-  return normalizedNotes.includes(code);
+  return giftTextContainsCode(notes, code);
 }
 
 function applyGiftRulesToNotes(notes = "", giftRules = new Map()) {
@@ -1145,7 +1202,8 @@ function applyGiftRulesToNotes(notes = "", giftRules = new Map()) {
 
     segments = segments.map((segment) => {
       const normalizedSegment = normalizeGiftCode(segment);
-      if (normalizedSegment.startsWith(codeKey) && /(?:=|:)/.test(segment)) {
+      const explicitCode = /(?:=|:)/.test(segment) ? normalizeGiftCode(segment.split(/=|:/)[0] || "") : "";
+      if (explicitCode === codeKey) {
         found = true;
         return annotation;
       }
@@ -1155,7 +1213,7 @@ function applyGiftRulesToNotes(notes = "", giftRules = new Map()) {
         return annotation;
       }
 
-      if (normalizedSegment.includes(codeKey)) {
+      if (giftTextContainsCode(segment, codeKey)) {
         found = true;
       }
 
@@ -1191,10 +1249,9 @@ function resolveGiftDiscountAmount(row = {}, supplierGiftRules = new Map()) {
     return 0;
   }
 
-  const normalizedNotes = normalizeGiftCode(row.notes);
   for (const [codeKey, rule] of giftRules.entries()) {
     const code = normalizeGiftCode(rule.code || codeKey);
-    if (!code || !normalizedNotes.includes(code)) {
+    if (!code || !giftTextContainsCode(row.notes, code)) {
       continue;
     }
 
@@ -2404,7 +2461,41 @@ function parsePriceCell(value = "") {
   return pattern.test(text) ? text : "";
 }
 
+function parseCodeFirstPriceLine(line = "") {
+  const text = cleanPriceLine(line);
+  if (!text || text.includes("\t")) {
+    return null;
+  }
+
+  const pattern = new RegExp(
+    `^([A-Za-z0-9][A-Za-z0-9/_().+-]{2,})(?:\\s*:\\s*|\\s+)(${priceCellPattern()})(?:(?:\\s*(?:d|vnd))|(?:\\s*k(?=\\s|$)))?(?:\\s*(.*))?$`,
+    "i"
+  );
+  const match = text.match(pattern);
+  if (!match) {
+    return null;
+  }
+
+  const rawName = clean(match[1]).replace(/[:]+$/g, "").trim();
+  const price = parsePriceCell(match[2]);
+  const tail = clean(match[3] || "").replace(/^[.,;:]+|[.,;:]+$/g, "");
+  if (!rawName || !price || !isLikelyProductCode(rawName)) {
+    return null;
+  }
+
+  return {
+    rawName,
+    price,
+    tail
+  };
+}
+
 function parseTrailingPriceLine(line = "") {
+  const codeFirst = parseCodeFirstPriceLine(line);
+  if (codeFirst) {
+    return codeFirst;
+  }
+
   const text = cleanPriceLine(line);
   if (!text || text.includes("\t")) {
     return null;
@@ -2884,6 +2975,9 @@ function buildInstructions(settings = {}) {
     columnRuleLines.length ? `Quy tắc theo từng cột:\n${columnRuleLines.join("\n")}` : "",
     "Khong tu suy doan gia tri qua tang/khuyen mai tu ma nhu XK50, FT75 neu quy tac qua tang cua NCC chua khai bao ro.",
     "Neu gap ma qua tang chua khai bao, giu nguyen ma do trong notes; khong chuyen thanh giam tien, khong cong/tru vao gia.",
+    "Gia NCC la gia dau tien nam ngay sau ma san pham/ten san pham hoac sau dau ':'. Cac so nam sau ma qua/ghi chu nhu 596 lit, 568 lit, 65 inch, 9 kg, 12000 BTU la thong so, khong phai gia.",
+    "Ma san pham khong bao gio nam phia sau gia. Cac cum sau gia nhu +MR24, XK100, FT75 la ghi chu/ma qua tang, khong dua vao productCode.",
+    "Neu ma san pham truoc gia co hau to nhu RS755WIA-PGV(22)-XK thi giu nguyen ca cum, khong rut gon thanh RS755WIA.",
     webSearchEnabled
       ? "Được phép dùng web search khi dữ liệu đầu vào thiếu thông tin và quy tắc cột yêu cầu tra cứu."
       : "Không dùng web search; nếu thiếu dữ liệu thì để trống hoặc ghi theo đúng quy tắc cột.",

@@ -617,6 +617,20 @@ function normalizeGiftRuleCode(value = "") {
   return normalizeSearch(value).replace(/đ/g, "d").replace(/\s+/g, "").toUpperCase();
 }
 
+function escapeRegExp(value = "") {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function giftTextContainsCode(value = "", code = "") {
+  const text = normalizeGiftRuleCode(value);
+  const key = normalizeGiftRuleCode(code);
+  if (!text || !key) {
+    return false;
+  }
+
+  return new RegExp(`(^|[^A-Z0-9])${escapeRegExp(key)}(?=$|[^A-Z0-9])`).test(text);
+}
+
 function parseGiftRuleAmounts(value = "") {
   const rules = new Map();
   const lines = String(value || "")
@@ -658,9 +672,8 @@ function resolveGiftDiscountAmount(row = {}, giftRulesBySupplier = new Map()) {
     return 0;
   }
 
-  const normalizedNotes = normalizeGiftRuleCode(row.notes);
   for (const [code, amount] of giftRules.entries()) {
-    if (code && normalizedNotes.includes(code)) {
+    if (code && giftTextContainsCode(row.notes, code)) {
       return amount;
     }
   }
