@@ -1578,30 +1578,12 @@ function App() {
   ).concat([{ id: "actions", label: "Xoa", locked: true }]);
 
   function resolveMinPrice(row) {
-    const explicitMinPrice = parseCurrencyToNumber(row.minPrice);
-    const purchasePrice = parsePriceValue(row.purchasePrice);
-    const discountedPrice = resolveGiftAdjustedPrice(row, supplierGiftRulesByName);
-    const discountAmount = resolveGiftDiscountAmount(row, supplierGiftRulesByName);
-
-    if (Number.isFinite(explicitMinPrice)) {
-      if (
-        discountAmount > 0 &&
-        Number.isFinite(purchasePrice) &&
-        explicitMinPrice >= purchasePrice &&
-        Number.isFinite(discountedPrice)
-      ) {
-        return {
-          value: discountedPrice,
-          label: formatCurrency(discountedPrice)
-        };
-      }
-
-      return {
-        value: explicitMinPrice,
-        label: formatCurrency(explicitMinPrice)
-      };
+    const derivedMinPrice = minPriceByProduct.get(productKey(row));
+    if (derivedMinPrice) {
+      return derivedMinPrice;
     }
 
+    const discountedPrice = resolveGiftAdjustedPrice(row, supplierGiftRulesByName);
     if (Number.isFinite(discountedPrice)) {
       return {
         value: discountedPrice,
@@ -1609,7 +1591,15 @@ function App() {
       };
     }
 
-    return minPriceByProduct.get(productKey(row)) || null;
+    const explicitMinPrice = parseCurrencyToNumber(row.minPrice);
+    if (Number.isFinite(explicitMinPrice)) {
+      return {
+        value: explicitMinPrice,
+        label: formatCurrency(explicitMinPrice)
+      };
+    }
+
+    return null;
   }
 
   function resolveMarginCode(row, supplierOverride = null) {
@@ -2380,7 +2370,8 @@ function resolveSalePrice(row) {
           settings: {
             ...effectiveSettings,
             provider: selectedProvider,
-            activeSupplier: supplier
+            activeSupplier: supplier,
+            activeSupplierUpdateMode: supplier?.updateMode || "partial"
           }
         })
       });

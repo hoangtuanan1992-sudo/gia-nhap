@@ -220,6 +220,10 @@ function sanitizeProductRows(rows = []) {
   return rows.map(productFromStructuredRow).filter(isMeaningfulProductRow);
 }
 
+function productRowsAreEqual(leftRows = [], rightRows = []) {
+  return JSON.stringify(sanitizeProductRows(leftRows)) === JSON.stringify(sanitizeProductRows(rightRows));
+}
+
 function productUpsertKey(row = {}) {
   const code = normalizeRuleCode(row.productCode);
   if (!code) {
@@ -230,10 +234,11 @@ function productUpsertKey(row = {}) {
   return `${supplierKey}::${code}`;
 }
 
-function mergeProductRows(existing = {}, incoming = {}) {
+function mergeProductRows(existing = {}, incoming = {}, options = {}) {
   const current = productFromStructuredRow(existing);
   const update = productFromStructuredRow(incoming);
   const merged = { ...current };
+  const preserveAvailableStock = options.preserveAvailableStock === true;
   const preserveWhenBlank = [
     "productCode",
     "productName",
@@ -241,13 +246,22 @@ function mergeProductRows(existing = {}, incoming = {}) {
     "minPrice",
     "webLink",
     "supplier",
-    "supplierStock",
     "notes"
   ];
 
   for (const key of preserveWhenBlank) {
     if (!isEmptyCellValue(update[key])) {
       merged[key] = update[key];
+    }
+  }
+
+  const updateStock = normalizeSupplierStock(update.supplierStock);
+  const currentStock = normalizeSupplierStock(current.supplierStock);
+  if (!isEmptyCellValue(updateStock)) {
+    if (preserveAvailableStock && updateStock === "Còn nhiều" && !isEmptyCellValue(currentStock)) {
+      merged.supplierStock = currentStock;
+    } else {
+      merged.supplierStock = updateStock;
     }
   }
 
@@ -260,7 +274,7 @@ function mergeProductRows(existing = {}, incoming = {}) {
   };
 }
 
-function upsertProductRows(currentRows = [], incomingRows = []) {
+function upsertProductRows(currentRows = [], incomingRows = [], settings = {}) {
   const next = [];
   const indexByKey = new Map();
 
@@ -268,7 +282,9 @@ function upsertProductRows(currentRows = [], incomingRows = []) {
     const key = productUpsertKey(row);
     if (key && indexByKey.has(key)) {
       const index = indexByKey.get(key);
-      next[index] = mergeProductRows(next[index], row);
+      next[index] = mergeProductRows(next[index], row, {
+        preserveAvailableStock: supplierUpdateModeFromSettings(settings, row.supplier) !== "full"
+      });
       continue;
     }
 
@@ -282,7 +298,9 @@ function upsertProductRows(currentRows = [], incomingRows = []) {
     const key = productUpsertKey(row);
     if (key && indexByKey.has(key)) {
       const index = indexByKey.get(key);
-      next[index] = mergeProductRows(next[index], row);
+      next[index] = mergeProductRows(next[index], row, {
+        preserveAvailableStock: supplierUpdateModeFromSettings(settings, row.supplier) !== "full"
+      });
       continue;
     }
 
@@ -309,6 +327,11 @@ function supplierConfigForName(settings = {}, supplierName = "") {
 }
 
 function supplierUpdateModeFromSettings(settings = {}, supplierName = "") {
+  const explicitMode = normalizeSupplierKey(settings.activeSupplierUpdateMode || settings.updateMode || "");
+  if (explicitMode === "full" || explicitMode === "partial") {
+    return explicitMode;
+  }
+
   const supplierKey = normalizeSupplierKey(supplierName);
   const activeSupplier = settings.activeSupplier || {};
   if (supplierKey && normalizeSupplierKey(activeSupplier.name) === supplierKey) {
@@ -380,7 +403,7 @@ function mergeIncomingProductRows(currentRows = [], incomingRows = [], settings 
   );
 
   return {
-    rows: upsertProductRows(baseRows, normalizedIncomingRows),
+    rows: upsertProductRows(baseRows, normalizedIncomingRows, settings),
     markedOutOfStock
   };
 }
@@ -478,8 +501,8 @@ function extractProductCodeFromProductName(value = "") {
     return leading.code;
   }
 
-  const candidates = [...text.matchAll(/\b[A-Za-z0-9][A-Za-z0-9/_().+-]{2,}(?=\s|$|\b)/g)]
-    .map((match) => match[0])
+  const candidates = [...text.matchAll(/[A-Za-z0-9][A-Za-z0-9/_().+-]{2,}/g)]
+    .map((match) => match[0].replace(/^[.,;:]+|[.,;:]+$/g, ""))
     .filter((candidate) => isLikelyProductCode(candidate))
     .filter((candidate) => !/^\d+[.,]?\d*$/.test(candidate));
 
@@ -1193,15 +1216,12 @@ function recalculateProductsWithSettings(rows = [], settings = {}) {
     const purchasePrice = parsePriceAmount(next.purchasePrice);
     const giftDiscount = resolveGiftDiscountAmount(next, supplierGiftRules);
     const derivedMinPrice = minPriceByCode.get(code);
-    const shouldPreferExplicitMin =
-      Number.isFinite(explicitMinPrice) &&
-      !(giftDiscount > 0 && Number.isFinite(purchasePrice) && explicitMinPrice >= purchasePrice);
-    const minPrice = shouldPreferExplicitMin
-      ? explicitMinPrice
-      : Number.isFinite(derivedMinPrice)
-        ? derivedMinPrice
-        : Number.isFinite(purchasePrice)
-          ? Math.max(0, purchasePrice - giftDiscount)
+    const minPrice = Number.isFinite(derivedMinPrice)
+      ? derivedMinPrice
+      : Number.isFinite(purchasePrice)
+        ? Math.max(0, purchasePrice - giftDiscount)
+        : Number.isFinite(explicitMinPrice)
+          ? explicitMinPrice
           : NaN;
     const margin = marginRules.get(code);
     next.minPrice = Number.isFinite(minPrice) ? formatPriceAmount(minPrice) : "";
@@ -1363,8 +1383,10 @@ async function appendLocalProducts(products, shopId = "admin") {
 async function compactLocalProducts(shopId = "admin") {
   return enqueueShopStoreWrite(shopId, async () => {
     const current = await readLocalProducts(shopId);
-    const next = upsertProductRows(current);
-    if (next.length !== current.length || JSON.stringify(next) !== JSON.stringify(current)) {
+    const settings = getAppSettingsForShop(shopId) || {};
+    let next = recalculateProductsWithSettings(upsertProductRows(current), settings);
+    next = await enrichRowsWithCatalogLinks(next, settings);
+    if (!productRowsAreEqual(current, next)) {
       await writeLocalProducts(next, shopId);
     }
     return current.length - next.length;
@@ -1617,6 +1639,25 @@ function productCatalogScore(row = {}, product = {}) {
   }
 
   return score;
+}
+
+async function enrichRowsWithCatalogLinks(rows = [], settings = {}) {
+  if (!Array.isArray(rows) || !rows.length) {
+    return rows;
+  }
+
+  let products = [];
+  try {
+    products = await loadProductCatalog(settings);
+  } catch {
+    return rows;
+  }
+
+  if (!products.length) {
+    return rows;
+  }
+
+  return enrichRowsWithProductCatalogManual(rows, products).rows;
 }
 
 function findCatalogProduct(row = {}, products = []) {
@@ -2153,10 +2194,10 @@ async function enrichRowsWithWebLookup({ client, model, rows, settings = {} }) {
   return catalogResult.rows;
 }
 
-function applyKnownProductDetails(rows = []) {
+function applyKnownProductDetails(rows = [], knownRows = rows) {
   const knownByCode = new Map();
 
-  for (const row of rows) {
+  for (const row of sanitizeProductRows(knownRows)) {
     const code = clean(row.productCode);
     const codeKey = normalizeLookupKey(code);
     const name = clean(row.productName);
@@ -2314,26 +2355,44 @@ function isLikelyInlineProductCode(value) {
   return tokens.length <= 4 && tokens.every((token) => /^[A-Za-z0-9/_().+-]+$/.test(token));
 }
 
-function parseInlinePriceLine(line) {
-  const text = clean(line).replace(/\s+/g, " ");
+function cleanPriceLine(value = "") {
+  return cleanSectionText(value)
+    .replace(/^[>|\s"'`]+/, "")
+    .replace(/^(?:[-+*•·–—]+|\d+[.)])\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function priceCellPattern() {
+  return String.raw`\d{1,3}(?:[.,]\d{3}){1,3}|\d{1,9}`;
+}
+
+function parsePriceCell(value = "") {
+  const text = clean(value)
+    .replace(/\s+/g, " ")
+    .replace(/\s*(?:đ|d|vnd)\s*$/i, "")
+    .replace(/\s*k\s*$/i, "000")
+    .trim();
+  const pattern = new RegExp(`^(?:${priceCellPattern()})$`, "i");
+  return pattern.test(text) ? text : "";
+}
+
+function parseTrailingPriceLine(line = "") {
+  const text = cleanPriceLine(line);
   if (!text || text.includes("\t")) {
     return null;
   }
 
-  const match = text.match(/^(.+?)\s+(\d{1,3}(?:[.,]\d{3})?|\d{1,6})(?:\s*(.*))?$/);
+  const pattern = new RegExp(`^(.+)\\s+(${priceCellPattern()})(?:(?:\\s*(?:đ|d|vnd))|(?:\\s*k(?=\\s|$)))?(?:\\s*(.*))?$`, "i");
+  const match = text.match(pattern);
   if (!match) {
     return null;
   }
 
-  const rawName = clean(match[1]);
-  const price = clean(match[2]);
+  const rawName = clean(match[1]).replace(/[:：-]+$/g, "").trim();
+  const price = parsePriceCell(match[2]);
   const tail = clean(match[3] || "").replace(/^[.,;:]+|[.,;:]+$/g, "");
-  if (!rawName || !isPriceCell(price)) {
-    return null;
-  }
-
-  const leading = splitLeadingCode(rawName);
-  if (!isLikelyInlineProductCode(rawName) && !leading.code) {
+  if (!rawName || !price) {
     return null;
   }
 
@@ -2344,8 +2403,23 @@ function parseInlinePriceLine(line) {
   };
 }
 
+function parseInlinePriceLine(line) {
+  const parsed = parseTrailingPriceLine(line);
+  if (!parsed) {
+    return null;
+  }
+
+  const leading = splitLeadingCode(parsed.rawName);
+  const embeddedCode = extractProductCodeFromProductName(parsed.rawName);
+  if (!isLikelyInlineProductCode(parsed.rawName) && !leading.code && !embeddedCode) {
+    return null;
+  }
+
+  return parsed;
+}
+
 function splitTableCells(line) {
-  const text = clean(line);
+  const text = cleanPriceLine(line);
   if (!text) {
     return [];
   }
@@ -2363,8 +2437,7 @@ function splitTableCells(line) {
 }
 
 function isPriceCell(value) {
-  const text = clean(value);
-  return /^\d{1,3}([.,]\d{3})?$/.test(text) || /^\d{1,6}$/.test(text);
+  return Boolean(parsePriceCell(value));
 }
 
 function isStockNote(value) {
@@ -2617,6 +2690,38 @@ function parseSupplierPriceTable(message, settings = {}) {
   }
 
   return rows;
+}
+
+function countLikelySupplierPriceLines(message = "") {
+  let count = 0;
+
+  for (const rawLine of String(message || "").split(/\r?\n/)) {
+    const parsed = parseTrailingPriceLine(rawLine);
+    if (!parsed) {
+      continue;
+    }
+
+    const leading = splitLeadingCode(parsed.rawName);
+    const embeddedCode = extractProductCodeFromProductName(parsed.rawName);
+    if (isLikelyInlineProductCode(parsed.rawName) || leading.code || embeddedCode) {
+      count += 1;
+    }
+  }
+
+  return count;
+}
+
+function supplierTableParseLooksComplete(message = "", rows = []) {
+  if (!rows.length) {
+    return false;
+  }
+
+  const expectedRows = countLikelySupplierPriceLines(message);
+  if (!expectedRows) {
+    return rows.length >= 8;
+  }
+
+  return rows.length >= 8 && rows.length >= Math.ceil(expectedRows * 0.85);
 }
 
 function fallbackNormalize(message, settings = {}) {
@@ -3052,33 +3157,45 @@ async function normalizeChunkedWithProvider(provider, message, settings, images 
   }
 
   const localRows = parseSupplierPriceTable(message, settings);
-  if (localRows.length >= 8) {
+  if (supplierTableParseLooksComplete(message, localRows)) {
     return {
       reply: `Mình đã tách được ${localRows.length} dòng từ bảng giá nhà cung cấp.`,
       rows: localRows
     };
   }
 
-  const chunks = splitMessageForApi(message);
-  if (chunks.length === 1) {
-    return normalizeProviderWithRetries(provider, message, settings, [], config);
-  }
-
-  const rows = [];
-  const warnings = [];
-  for (let index = 0; index < chunks.length; index += 1) {
-    const result = await normalizeProviderWithRetries(provider, chunks[index], settings, [], config);
-    rows.push(...(result.rows || []));
-    if (result.warning) {
-      warnings.push(result.warning);
+  try {
+    const chunks = splitMessageForApi(message);
+    if (chunks.length === 1) {
+      return normalizeProviderWithRetries(provider, message, settings, [], config);
     }
-  }
 
-  return {
-    reply: `Da chuan hoa ${rows.length} dong tu ${chunks.length} phan du lieu.`,
-    rows,
-    warning: warnings.filter(Boolean).join(" ")
-  };
+    const rows = [];
+    const warnings = [];
+    for (let index = 0; index < chunks.length; index += 1) {
+      const result = await normalizeProviderWithRetries(provider, chunks[index], settings, [], config);
+      rows.push(...(result.rows || []));
+      if (result.warning) {
+        warnings.push(result.warning);
+      }
+    }
+
+    return {
+      reply: `Da chuan hoa ${rows.length} dong tu ${chunks.length} phan du lieu.`,
+      rows,
+      warning: warnings.filter(Boolean).join(" ")
+    };
+  } catch (error) {
+    if (localRows.length) {
+      return {
+        reply: `Mình đã tách được ${localRows.length} dòng từ bảng giá nhà cung cấp.`,
+        rows: localRows,
+        warning: `AI không xử lý thêm được phần còn lại: ${error.message}`
+      };
+    }
+
+    throw error;
+  }
 }
 
 function buildConfigResponse(shopId = "admin") {
@@ -3119,52 +3236,70 @@ async function readProducts(req) {
 
   if (!forceSheets || !isSheetsConfigured(shopConfig)) {
     const localRows = applyKnownProductDetails(await readLocalProducts(shopId));
+    const normalizedRows = recalculateProductsWithSettings(localRows, settings);
     return {
       source: "local",
-      rows: visibleLocalProductsWithRowIds(localRows),
+      rows: visibleLocalProductsWithRowIds(normalizedRows),
       warning: ""
     };
   }
 
   try {
     const catalogResult = await enrichRowsWithProductCatalog(sanitizeProductRows(await readSheetProducts(shopConfig)), settings);
+    const normalizedRows = recalculateProductsWithSettings(catalogResult.rows, settings);
     return {
       source: "google-sheets",
-      rows: visibleLocalProductsWithRowIds(catalogResult.rows),
+      rows: visibleLocalProductsWithRowIds(normalizedRows),
       warning: catalogResult.warning || ""
     };
   } catch (error) {
     const localRows = applyKnownProductDetails(await readLocalProducts(shopId));
+    const normalizedRows = recalculateProductsWithSettings(localRows, settings);
     return {
       source: "local",
-      rows: visibleLocalProductsWithRowIds(localRows),
+      rows: visibleLocalProductsWithRowIds(normalizedRows),
       warning: `Khong doc duoc Google Sheets: ${error.message}`
     };
   }
 }
 
-async function appendProducts(products, settings = {}, req) {
+async function appendProducts(products, settings = {}, req, options = {}) {
   const shopId = requestShopId(req);
   const shopConfig = getRuntimeForShop(shopId);
-  const catalogResult = await enrichRowsWithProductCatalog(sanitizeProductRows(products), settings);
-  const safeProducts = sanitizeProductRows(catalogResult.rows);
+  const persist = options.persist !== false;
+  const baseRows = sanitizeProductRows(await readLocalProducts(shopId));
+  const incomingRows = sanitizeProductRows(products);
+  const prefilledRows = applyKnownProductDetails(incomingRows, baseRows);
+  let safeProducts = prefilledRows;
+  let catalogWarning = "";
+  const lookupRows = safeProducts.filter(needsWebLookup);
+  if (lookupRows.length) {
+    const catalogResult = await enrichRowsWithProductCatalog(lookupRows, settings);
+    safeProducts = upsertProductRows(safeProducts, sanitizeProductRows(catalogResult.rows), settings);
+    catalogWarning = catalogResult.warning || "";
+  }
   if (!safeProducts.length) {
-    return { source: "none", warning: catalogResult.warning || "" };
+    return {
+      source: "none",
+      warning: catalogWarning
+    };
   }
 
-  const baseRows = sanitizeProductRows(await readLocalProducts(shopId));
   const mergeResult = mergeIncomingProductRows(baseRows, safeProducts, settings);
-  const nextRows = mergeResult.rows;
+  let nextRows = recalculateProductsWithSettings(mergeResult.rows, settings);
+  nextRows = await enrichRowsWithCatalogLinks(nextRows, settings);
   const fullUpdateWarning = mergeResult.markedOutOfStock
     ? `Da chuyen ${mergeResult.markedOutOfStock} san pham khong co trong lan cap nhat sang Het hang.`
     : "";
-  await writeLocalProducts(nextRows, shopId);
+  if (persist) {
+    await writeLocalProducts(nextRows, shopId);
+  }
 
-  if (!isSheetsConfigured(shopConfig)) {
+  if (!persist || !isSheetsConfigured(shopConfig)) {
     return {
-      source: "local",
+      source: persist ? "local" : "not-saved",
       rows: visibleLocalProductsWithRowIds(nextRows),
-      warning: [catalogResult.warning, fullUpdateWarning].filter(Boolean).join(" ")
+      warning: [catalogWarning, fullUpdateWarning].filter(Boolean).join(" ")
     };
   }
 
@@ -3175,7 +3310,7 @@ async function appendProducts(products, settings = {}, req) {
   return {
     source: "local",
     rows: visibleLocalProductsWithRowIds(nextRows),
-    warning: [catalogResult.warning, fullUpdateWarning, "Da luu cuc bo, dang dong bo Google Sheets phia sau."]
+    warning: [catalogWarning, fullUpdateWarning, "Da luu cuc bo, dang dong bo Google Sheets phia sau."]
       .filter(Boolean)
       .join(" ")
   };
@@ -3209,17 +3344,11 @@ async function enrichStoredProducts(settings = {}, req) {
   const shopConfig = getRuntimeForShop(shopId);
   const currentRows = await readLocalProducts(shopId);
   let catalogResult = await enrichRowsWithProductCatalog(applyKnownProductDetails(currentRows), settings);
-  let nextRows = catalogResult.rows;
+  let nextRows = recalculateProductsWithSettings(catalogResult.rows, settings);
+  nextRows = await enrichRowsWithCatalogLinks(nextRows, settings);
 
   if (!nextRows.some(needsWebLookup)) {
-    let updated = 0;
-    for (let index = 0; index < currentRows.length; index += 1) {
-      const before = currentRows[index] || {};
-      const after = nextRows[index] || {};
-      if (before.productName !== after.productName || before.webLink !== after.webLink) {
-        updated += 1;
-      }
-    }
+    const updated = productRowsAreEqual(currentRows, nextRows) ? 0 : nextRows.length;
 
     if (updated > 0) {
       await writeLocalProducts(nextRows, shopId);
@@ -3247,16 +3376,10 @@ async function enrichStoredProducts(settings = {}, req) {
     }
   });
   catalogResult = await enrichRowsWithProductCatalog(applyKnownProductDetails(nextRows), settings);
-  nextRows = catalogResult.rows;
+  nextRows = recalculateProductsWithSettings(catalogResult.rows, settings);
+  nextRows = await enrichRowsWithCatalogLinks(nextRows, settings);
 
-  let updated = 0;
-  for (let index = 0; index < currentRows.length; index += 1) {
-    const before = currentRows[index] || {};
-    const after = nextRows[index] || {};
-    if (before.productName !== after.productName || before.webLink !== after.webLink) {
-      updated += 1;
-    }
-  }
+  const updated = productRowsAreEqual(currentRows, nextRows) ? 0 : nextRows.length;
 
   if (updated > 0) {
     await writeLocalProducts(nextRows, shopId);
@@ -3790,27 +3913,18 @@ app.post("/api/chat", async (req, res, next) => {
       })
     ));
     rows = applySalePriceVisibility(rows, settings);
-    const catalogResult = await enrichRowsWithProductCatalog(rows, settings);
-    rows = catalogResult.rows;
-    const linkCheck = await stripBrokenWebLinks(rows);
-    rows = linkCheck.rows;
     const shouldAutoAdd = settings.autoAdd !== false;
-    const appendResult = shouldAutoAdd
-      ? await appendProducts(rows, settings, req)
-      : { source: "not-saved", warning: "" };
+    const appendResult = await appendProducts(rows, settings, req, { persist: shouldAutoAdd });
     const source = appendResult.source;
     const undoable = shouldAutoAdd && source !== "google-sheets";
-    let responseRows = rows;
+    let responseRows = appendResult.rows || rows;
     let readBackWarning = "";
     if (shouldAutoAdd && source !== "none") {
       const readBack = await readProducts(req);
-      responseRows = Array.isArray(readBack.rows) ? readBack.rows : rows;
+      responseRows = Array.isArray(readBack.rows) ? readBack.rows : responseRows;
       readBackWarning = readBack.warning || "";
     }
-    const linkWarning = linkCheck.removed
-      ? `Da bo ${linkCheck.removed} link web khong truy cap duoc.`
-      : "";
-    const warning = [result.warning, catalogResult.warning, linkWarning, appendResult.warning, readBackWarning]
+    const warning = [result.warning, appendResult.warning, readBackWarning]
       .filter(Boolean)
       .join(" ");
 
