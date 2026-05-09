@@ -478,7 +478,7 @@ function extractProductCodeFromProductName(value = "") {
     return leading.code;
   }
 
-  const candidates = [...text.matchAll(/\b[A-Za-z0-9][A-Za-z0-9/_().-]{2,}\b/g)]
+  const candidates = [...text.matchAll(/\b[A-Za-z0-9][A-Za-z0-9/_().+-]{2,}(?=\s|$|\b)/g)]
     .map((match) => match[0])
     .filter((candidate) => isLikelyProductCode(candidate))
     .filter((candidate) => !/^\d+[.,]?\d*$/.test(candidate));
@@ -2223,12 +2223,12 @@ function isLikelyProductCode(value) {
     return false;
   }
 
-  return /^(?=.*[0-9])(?=.*[A-Za-z])[A-Za-z0-9][A-Za-z0-9/_().-]{2,}$/.test(text);
+  return /^(?=.*[0-9])(?=.*[A-Za-z])[A-Za-z0-9][A-Za-z0-9/_().+-]{2,}$/.test(text);
 }
 
 function splitLeadingCode(value) {
   const text = clean(value);
-  const match = text.match(/^([A-Za-z0-9][A-Za-z0-9/_().-]{2,})\s+(.+)$/);
+  const match = text.match(/^([A-Za-z0-9][A-Za-z0-9/_().+-]{2,})\s+(.+)$/);
   if (!match || !isLikelyProductCode(match[1])) {
     return { code: "", remainder: text };
   }
@@ -2236,6 +2236,59 @@ function splitLeadingCode(value) {
   return {
     code: match[1],
     remainder: clean(match[2])
+  };
+}
+
+function isLikelyInlineProductCode(value) {
+  const text = clean(value);
+  if (!text) {
+    return false;
+  }
+
+  if (isLikelyProductCode(text)) {
+    return true;
+  }
+
+  const compact = text.replace(/\s+/g, "");
+  if (!/[A-Za-z]/.test(compact) || !/\d/.test(compact)) {
+    return false;
+  }
+
+  if (!/^[A-Za-z0-9/_().+-]+$/.test(compact)) {
+    return false;
+  }
+
+  const tokens = text.split(/\s+/).filter(Boolean);
+  return tokens.length <= 4 && tokens.every((token) => /^[A-Za-z0-9/_().+-]+$/.test(token));
+}
+
+function parseInlinePriceLine(line) {
+  const text = clean(line).replace(/\s+/g, " ");
+  if (!text || text.includes("\t")) {
+    return null;
+  }
+
+  const match = text.match(/^(.+?)\s+(\d{1,3}(?:[.,]\d{3})?|\d{1,6})(?:\s*(.*))?$/);
+  if (!match) {
+    return null;
+  }
+
+  const rawName = clean(match[1]);
+  const price = clean(match[2]);
+  const tail = clean(match[3] || "").replace(/^[.,;:]+|[.,;:]+$/g, "");
+  if (!rawName || !isPriceCell(price)) {
+    return null;
+  }
+
+  const leading = splitLeadingCode(rawName);
+  if (!isLikelyInlineProductCode(rawName) && !leading.code) {
+    return null;
+  }
+
+  return {
+    rawName,
+    price,
+    tail
   };
 }
 
@@ -2247,6 +2300,11 @@ function splitTableCells(line) {
 
   if (text.includes("\t")) {
     return text.split(/\t+/).map(clean);
+  }
+
+  const inlinePrice = parseInlinePriceLine(text);
+  if (inlinePrice) {
+    return [inlinePrice.rawName, inlinePrice.price, inlinePrice.tail].filter(Boolean);
   }
 
   return text.split(/\s{2,}/).map(clean);
@@ -2284,14 +2342,19 @@ function appendNote(...values) {
 function cleanSectionText(value) {
   return clean(value)
     .replace(/^['"]+/, "")
-    .replace(/^✅\s*/u, "")
+    .replace(/^(?:✅|✔|☑|✓)\ufe0f?\s*/u, "")
+    .replace(/[\u{1F4A5}\u{1F525}]+/gu, "")
     .replace(/\s+/g, " ")
     .trim();
 }
 
+function isCheckmarkHeadingLine(value) {
+  return /^(?:✅|✔|☑|✓)\ufe0f?\s*/u.test(clean(value).replace(/^['"]+/, "").trim());
+}
+
 function parseSectionHeading(line) {
   const text = cleanSectionText(line);
-  if (!text || !/^✅/u.test(clean(line).replace(/^['"]+/, "").trim())) {
+  if (!text || !isCheckmarkHeadingLine(line)) {
     return null;
   }
 
@@ -2320,7 +2383,14 @@ function parseSubheading(line) {
 
 function parseLooseSectionHeading(line) {
   const text = cleanSectionText(line).replace(/^[?•\-–]+\s*/, "");
-  if (!text || text.includes("\t") || text.includes(":") || isPriceCell(text) || isLikelyProductCode(text)) {
+  if (
+    !text ||
+    text.includes("\t") ||
+    text.includes(":") ||
+    isPriceCell(text) ||
+    isLikelyInlineProductCode(text) ||
+    parseInlinePriceLine(text)
+  ) {
     return null;
   }
 
@@ -2340,7 +2410,10 @@ function parseLooseSectionHeading(line) {
     "quat",
     "say",
     "hut mui",
-    "loa"
+    "loa",
+    "hang xa",
+    "loc khi",
+    "hut am"
   ];
 
   if (!categoryWords.some((word) => normalized.includes(word))) {
@@ -2358,8 +2431,37 @@ function parseLooseSectionHeading(line) {
   };
 }
 
+function parseBrandSubheading(line, section) {
+  const text = cleanSectionText(line).replace(/^[?•\-–]+\s*/, "");
+  if (!section || !text || text.includes("\t") || text.includes(":")) {
+    return "";
+  }
+
+  if (text.length > 40 || isPriceCell(text) || isLikelyInlineProductCode(text) || parseInlinePriceLine(text)) {
+    return "";
+  }
+
+  if (!/[A-Za-zÀ-ỹĐđ]/u.test(text)) {
+    return "";
+  }
+
+  return text;
+}
+
 function categoryContext(section, subsection) {
   return [section, subsection].map(clean).filter(Boolean).join(" - ");
+}
+
+function deriveProductIdentityFromPriceLine(rawName, context) {
+  const source = clean(rawName);
+  if (isLikelyInlineProductCode(source)) {
+    return {
+      productCode: source,
+      productName: context ? `${context} ${source}` : source
+    };
+  }
+
+  return deriveProductIdentity(source, context);
 }
 
 function deriveProductIdentity(rawName, context) {
@@ -2430,13 +2532,19 @@ function parseSupplierPriceTable(message, settings = {}) {
       continue;
     }
 
+    const brandSubheading = parseBrandSubheading(line, section);
+    if (brandSubheading) {
+      subsection = brandSubheading;
+      continue;
+    }
+
     const cells = splitTableCells(line).filter(Boolean);
     if (cells.length < 2 || !isPriceCell(cells[1])) {
       continue;
     }
 
     const context = categoryContext(section, subsection);
-    const identity = deriveProductIdentity(cells[0], context);
+    const identity = deriveProductIdentityFromPriceLine(cells[0], context);
     const noteCells = cells.slice(2);
     const stockNotes = noteCells.filter(isStockNote);
     const businessNotes = noteCells.filter((value) => !isStockNote(value));
@@ -2627,7 +2735,7 @@ function splitMessageForApi(message) {
 
   for (const line of lines) {
     const trimmed = clean(line);
-    if (/^(✅|\*\*\*)/u.test(trimmed)) {
+    if (isCheckmarkHeadingLine(trimmed) || trimmed.startsWith("***")) {
       context = line;
     }
 
@@ -2889,6 +2997,14 @@ async function normalizeProviderWithRetries(provider, message, settings, images 
 async function normalizeChunkedWithProvider(provider, message, settings, images = [], config = runtimeConfig) {
   if (images.length) {
     return normalizeProviderWithRetries(provider, message, settings, images, config);
+  }
+
+  const localRows = parseSupplierPriceTable(message, settings);
+  if (localRows.length >= 8) {
+    return {
+      reply: `Mình đã tách được ${localRows.length} dòng từ bảng giá nhà cung cấp.`,
+      rows: localRows
+    };
   }
 
   const chunks = splitMessageForApi(message);

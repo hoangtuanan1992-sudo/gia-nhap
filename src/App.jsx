@@ -592,7 +592,7 @@ function isValidWebLink(value) {
 
 function isLikelyLookupCode(value) {
   const text = String(value || "").trim();
-  return /^(?=.*[0-9])(?=.*[A-Za-z])[A-Za-z0-9][A-Za-z0-9/_().-]{2,}$/.test(text);
+  return /^(?=.*[0-9])(?=.*[A-Za-z])[A-Za-z0-9][A-Za-z0-9/_().+-]{2,}$/.test(text);
 }
 
 function rowNeedsLookup(row = {}) {
