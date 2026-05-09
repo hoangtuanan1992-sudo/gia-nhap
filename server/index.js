@@ -389,7 +389,7 @@ function clean(value) {
 }
 
 function repairVietnameseText(value = "") {
-  let text = clean(value);
+  let text = clean(value).normalize("NFC");
   if (!text) {
     return "";
   }
@@ -421,7 +421,7 @@ function repairVietnameseText(value = "") {
     text = text.replace(pattern, replacement);
   }
 
-  return text.replace(/\s+/g, " ").trim();
+  return text.normalize("NFC").replace(/\s+/g, " ").trim();
 }
 
 function normalizeSupplierStockText(value = "") {
