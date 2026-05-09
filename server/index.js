@@ -972,10 +972,11 @@ function productWorkbookKey(row = {}, settings = {}) {
 
 function cheapestProductRows(rows = [], settings = {}) {
   const byProduct = new Map();
+  const supplierGiftRules = buildSupplierGiftRuleMap(settings);
 
   for (const row of sanitizeProductRows(rows)) {
     const key = productWorkbookKey(row, settings);
-    const price = parsePriceAmount(row.purchasePrice);
+    const price = effectivePurchaseAmount(row, supplierGiftRules);
     if (!key || !Number.isFinite(price)) {
       continue;
     }
@@ -1120,10 +1121,7 @@ function applyGiftRulesToNotes(notes = "", giftRules = new Map()) {
   return appendNote(...segments);
 }
 
-function recalculateProductsWithSettings(rows = [], settings = {}) {
-  const safeRows = sanitizeProductRows(rows);
-  const marginRules = parseMarginRuleValues(settings.marginRules);
-  const minPriceByCode = new Map();
+function buildSupplierGiftRuleMap(settings = {}) {
   const supplierGiftRules = new Map();
 
   for (const supplier of settings.suppliers || []) {
@@ -1133,9 +1131,51 @@ function recalculateProductsWithSettings(rows = [], settings = {}) {
     }
   }
 
+  return supplierGiftRules;
+}
+
+function resolveGiftDiscountAmount(row = {}, supplierGiftRules = new Map()) {
+  const supplierKey = foldText(row.supplier);
+  const giftRules = supplierGiftRules.get(supplierKey);
+  if (!giftRules?.size) {
+    return 0;
+  }
+
+  const normalizedNotes = normalizeGiftCode(row.notes);
+  for (const [codeKey, rule] of giftRules.entries()) {
+    const code = normalizeGiftCode(rule.code || codeKey);
+    if (!code || !normalizedNotes.includes(code)) {
+      continue;
+    }
+
+    const amount = parsePriceAmount(rule.value);
+    if (Number.isFinite(amount) && amount > 0) {
+      return amount;
+    }
+  }
+
+  return 0;
+}
+
+function effectivePurchaseAmount(row = {}, supplierGiftRules = new Map()) {
+  const price = parsePriceAmount(row.purchasePrice);
+  if (!Number.isFinite(price)) {
+    return NaN;
+  }
+
+  const discount = resolveGiftDiscountAmount(row, supplierGiftRules);
+  return Math.max(0, price - discount);
+}
+
+function recalculateProductsWithSettings(rows = [], settings = {}) {
+  const safeRows = sanitizeProductRows(rows);
+  const marginRules = parseMarginRuleValues(settings.marginRules);
+  const minPriceByCode = new Map();
+  const supplierGiftRules = buildSupplierGiftRuleMap(settings);
+
   for (const row of safeRows) {
     const code = resolveMatchedProductCode(row, settings);
-    const price = parsePriceAmount(row.purchasePrice);
+    const price = effectivePurchaseAmount(row, supplierGiftRules);
     if (!code || !Number.isFinite(price)) {
       continue;
     }
@@ -1150,7 +1190,19 @@ function recalculateProductsWithSettings(rows = [], settings = {}) {
     const next = productFromStructuredRow(row);
     const code = resolveMatchedProductCode(next, settings);
     const explicitMinPrice = parsePriceAmount(next.minPrice);
-    const minPrice = Number.isFinite(explicitMinPrice) ? explicitMinPrice : minPriceByCode.get(code);
+    const purchasePrice = parsePriceAmount(next.purchasePrice);
+    const giftDiscount = resolveGiftDiscountAmount(next, supplierGiftRules);
+    const derivedMinPrice = minPriceByCode.get(code);
+    const shouldPreferExplicitMin =
+      Number.isFinite(explicitMinPrice) &&
+      !(giftDiscount > 0 && Number.isFinite(purchasePrice) && explicitMinPrice >= purchasePrice);
+    const minPrice = shouldPreferExplicitMin
+      ? explicitMinPrice
+      : Number.isFinite(derivedMinPrice)
+        ? derivedMinPrice
+        : Number.isFinite(purchasePrice)
+          ? Math.max(0, purchasePrice - giftDiscount)
+          : NaN;
     const margin = marginRules.get(code);
     next.minPrice = Number.isFinite(minPrice) ? formatPriceAmount(minPrice) : "";
     next.salePrice = Number.isFinite(margin) && Number.isFinite(minPrice) ? formatPriceAmount(minPrice + margin) : "";

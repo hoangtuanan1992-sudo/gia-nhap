@@ -586,6 +586,70 @@ function displayCurrency(value) {
   return Number.isFinite(numeric) ? formatCurrency(numeric) : value || "";
 }
 
+function normalizeGiftRuleCode(value = "") {
+  return normalizeSearch(value).replace(/\s+/g, "").toUpperCase();
+}
+
+function parseGiftRuleAmounts(value = "") {
+  const rules = new Map();
+  const lines = String(value || "")
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (const line of lines) {
+    const match =
+      line.match(/^\[?([^\]=:>]+?)\]?\s*(?:=|:|=>|->)\s*(.+)$/) ||
+      line.match(/^([^\s=:\]]+)\s+(.+)$/);
+    const code = normalizeGiftRuleCode(match?.[1] || "");
+    const amount = parseCurrencyToNumber(match?.[2] || "", { assumeThousands: true });
+    if (code && Number.isFinite(amount) && amount > 0) {
+      rules.set(code, amount);
+    }
+  }
+
+  return rules;
+}
+
+function buildSupplierGiftRulesByName(suppliers = []) {
+  const next = new Map();
+
+  for (const supplier of suppliers) {
+    const key = normalizeSearch(supplier?.name);
+    if (key) {
+      next.set(key, parseGiftRuleAmounts(supplier?.giftRule));
+    }
+  }
+
+  return next;
+}
+
+function resolveGiftDiscountAmount(row = {}, giftRulesBySupplier = new Map()) {
+  const supplierKey = normalizeSearch(row.supplier);
+  const giftRules = giftRulesBySupplier.get(supplierKey);
+  if (!giftRules?.size) {
+    return 0;
+  }
+
+  const normalizedNotes = normalizeGiftRuleCode(row.notes);
+  for (const [code, amount] of giftRules.entries()) {
+    if (code && normalizedNotes.includes(code)) {
+      return amount;
+    }
+  }
+
+  return 0;
+}
+
+function resolveGiftAdjustedPrice(row = {}, giftRulesBySupplier = new Map()) {
+  const price = parsePriceValue(row.purchasePrice);
+  if (!Number.isFinite(price)) {
+    return Number.NaN;
+  }
+
+  return Math.max(0, price - resolveGiftDiscountAmount(row, giftRulesBySupplier));
+}
+
 function isValidWebLink(value) {
   return /^https?:\/\//i.test(String(value || "").trim());
 }
@@ -985,19 +1049,23 @@ function highlightMarginRuleText(text = "", query = "") {
   );
 }
 
-function cheapestRows(sourceRows) {
+function cheapestRows(sourceRows, giftRulesBySupplier = new Map()) {
   const byProduct = new Map();
 
   for (const [index, row] of sourceRows.entries()) {
     const key = productKey(row) || `row-${row.rowId || row.batchId || index}`;
+    const price = resolveGiftAdjustedPrice(row, giftRulesBySupplier);
+    if (!Number.isFinite(price)) {
+      continue;
+    }
 
     const current = byProduct.get(key);
-    if (!current || parsePriceValue(row.purchasePrice) < parsePriceValue(current.purchasePrice)) {
-      byProduct.set(key, row);
+    if (!current || price < current.price) {
+      byProduct.set(key, { price, row });
     }
   }
 
-  return [...byProduct.values()];
+  return [...byProduct.values()].map((item) => item.row);
 }
 
 function App() {
@@ -1431,14 +1499,19 @@ function App() {
     return [...new Set([...suppliers.map((supplier) => supplier.name), ...names].filter(Boolean))];
   }, [rows, suppliers]);
 
+  const supplierGiftRulesByName = useMemo(
+    () => buildSupplierGiftRulesByName(suppliers),
+    [suppliers]
+  );
+
   const tableSearchQuery = normalizeSearch(tableSearch);
   const baseTableRows = useMemo(() => {
     if (activeTableTab === "cheapest") {
-      return cheapestRows(rows);
+      return cheapestRows(rows, supplierGiftRulesByName);
     }
 
     return rows.filter((row) => row.supplier === activeTableTab);
-  }, [activeTableTab, rows]);
+  }, [activeTableTab, rows, supplierGiftRulesByName]);
   const tableRows = useMemo(() => {
     if (!tableSearchQuery) {
       return baseTableRows;
@@ -1453,7 +1526,7 @@ function App() {
 
     for (const row of rows) {
       const key = productKey(row);
-      const price = parsePriceValue(row.purchasePrice);
+      const price = resolveGiftAdjustedPrice(row, supplierGiftRulesByName);
       if (!key || !Number.isFinite(price)) {
         continue;
       }
@@ -1468,7 +1541,7 @@ function App() {
     }
 
     return next;
-  }, [rows]);
+  }, [rows, supplierGiftRulesByName]);
 
   const marginRulesByProduct = useMemo(
     () => parseMarginRules(settings.marginRules),
@@ -1506,10 +1579,33 @@ function App() {
 
   function resolveMinPrice(row) {
     const explicitMinPrice = parseCurrencyToNumber(row.minPrice);
+    const purchasePrice = parsePriceValue(row.purchasePrice);
+    const discountedPrice = resolveGiftAdjustedPrice(row, supplierGiftRulesByName);
+    const discountAmount = resolveGiftDiscountAmount(row, supplierGiftRulesByName);
+
     if (Number.isFinite(explicitMinPrice)) {
+      if (
+        discountAmount > 0 &&
+        Number.isFinite(purchasePrice) &&
+        explicitMinPrice >= purchasePrice &&
+        Number.isFinite(discountedPrice)
+      ) {
+        return {
+          value: discountedPrice,
+          label: formatCurrency(discountedPrice)
+        };
+      }
+
       return {
         value: explicitMinPrice,
         label: formatCurrency(explicitMinPrice)
+      };
+    }
+
+    if (Number.isFinite(discountedPrice)) {
+      return {
+        value: discountedPrice,
+        label: formatCurrency(discountedPrice)
       };
     }
 
