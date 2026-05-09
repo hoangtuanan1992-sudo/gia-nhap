@@ -240,3 +240,37 @@ export async function writeSheetWorkbookProducts(
     await replaceSheetProducts(sheets, config, title, group.rows || []);
   }
 }
+
+export async function clearSheetWorkbookProducts(config = runtimeConfig) {
+  const sheets = await getSheetsClient(config);
+  const spreadsheetId = config.sheets?.sheetId;
+  const spreadsheet = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: "sheets.properties.title"
+  });
+
+  const clearedTitles = [];
+  const failedTitles = [];
+
+  for (const sheet of spreadsheet.data.sheets || []) {
+    const title = String(sheet.properties?.title || "").trim();
+    if (!title) {
+      continue;
+    }
+
+    try {
+      await sheets.spreadsheets.values.clear({
+        spreadsheetId,
+        range: `${quoteSheetTitle(title)}!A2:I`
+      });
+      clearedTitles.push(title);
+    } catch (error) {
+      failedTitles.push({
+        title,
+        error: error?.message || "Khong xoa duoc du lieu."
+      });
+    }
+  }
+
+  return { clearedTitles, failedTitles };
+}

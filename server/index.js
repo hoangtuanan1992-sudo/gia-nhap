@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import OpenAI from "openai";
 import {
   isSheetsConfigured,
+  clearSheetWorkbookProducts,
   readSheetProducts,
   writeSheetWorkbookProducts
 } from "./googleSheets.js";
@@ -1330,7 +1331,7 @@ async function backupFileIfExists(filePath) {
   }
 }
 
-async function writeLocalProducts(products, shopId = "admin") {
+async function writeLocalProducts(products, shopId = "admin", options = {}) {
   if (isMysqlConfigured()) {
     const savedToMysql = await writeProductsToMysql(shopId, products);
     if (savedToMysql) {
@@ -1340,7 +1341,9 @@ async function writeLocalProducts(products, shopId = "admin") {
 
   await ensureLocalStore(shopId);
   const targetFile = productsFileForShop(shopId);
-  await backupFileIfExists(targetFile);
+  if (!options.skipBackup) {
+    await backupFileIfExists(targetFile);
+  }
   await fs.writeFile(targetFile, `${JSON.stringify(products, null, 2)}\n`, "utf8");
 }
 
@@ -1390,6 +1393,14 @@ async function deleteLocalRow(rowId, shopId = "admin") {
     current.splice(rowIndex, 1);
     await writeLocalProducts(current, shopId);
     return 1;
+  });
+}
+
+async function clearStoredProducts(shopId = "admin") {
+  return enqueueShopStoreWrite(shopId, async () => {
+    const current = await readLocalProducts(shopId);
+    await writeLocalProducts([], shopId, { skipBackup: true });
+    return Array.isArray(current) ? current.length : 0;
   });
 }
 
@@ -3491,6 +3502,37 @@ app.post("/api/products", async (req, res, next) => {
     const rows = Array.isArray(req.body?.rows) ? sanitizeProductRows(req.body.rows) : [];
     const appendResult = await appendProducts(rows, req.body?.settings || getAppSettingsForShop(requestShopId(req)) || {}, req);
     res.json({ source: appendResult.source, rows: appendResult.rows || rows, warning: appendResult.warning || "" });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/products/clear", async (req, res, next) => {
+  try {
+    const shopId = requestShopId(req);
+    const shopConfig = getRuntimeForShop(shopId);
+    const removed = await clearStoredProducts(shopId);
+
+    let sheetTabsCleared = 0;
+    let warning = "";
+
+    if (isSheetsConfigured(shopConfig)) {
+      try {
+        const sheetResult = await clearSheetWorkbookProducts(shopConfig);
+        sheetTabsCleared = sheetResult.clearedTitles.length;
+        if (sheetResult.failedTitles.length) {
+          warning = `Da xoa du lieu cuc bo, nhung chua xoa het Google Sheets (${sheetResult.failedTitles.length} tab bi loi).`;
+        }
+      } catch (error) {
+        warning = `Da xoa du lieu cuc bo, nhung khong xoa duoc Google Sheets: ${error.message}`;
+      }
+    }
+
+    res.json({
+      removed,
+      sheetTabsCleared,
+      warning
+    });
   } catch (error) {
     next(error);
   }

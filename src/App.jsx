@@ -1089,6 +1089,7 @@ function App() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [isScanningModels, setIsScanningModels] = useState(false);
+  const [isClearingData, setIsClearingData] = useState(false);
   const [isUndoing, setIsUndoing] = useState(false);
   const [deletingRowId, setDeletingRowId] = useState("");
   const [showSupplierRequiredError, setShowSupplierRequiredError] = useState(false);
@@ -2212,6 +2213,48 @@ function resolveSalePrice(row) {
   function clearAllMessages() {
     setMessages(defaultChatMessages());
     setStatus("Đã xóa lịch sử chat.");
+  }
+
+  async function clearAllData() {
+    const confirmMessage = "Xóa toàn bộ dữ liệu bảng, chat và Google Sheets của shop đang xem?";
+    if (typeof window !== "undefined" && !window.confirm(confirmMessage)) {
+      return;
+    }
+
+    setIsClearingData(true);
+    try {
+      const response = await authFetch("/api/products/clear", {
+        method: "POST"
+      });
+      const payload = await parseResponsePayload(response);
+      if (!response.ok) {
+        throw new Error(payload.error || "Khong xoa duoc du lieu.");
+      }
+
+      setRows([]);
+      setMessages(defaultChatMessages());
+      setLastSubmission(null);
+      setInput("");
+      setAttachedImages([]);
+      setTableSearch("");
+      setActiveTableTab("cheapest");
+      setPendingGiftCode("");
+      setGiftValueDraft("");
+      setPendingSubmission(null);
+      setPendingProductMatch(null);
+      setShowSupplierRequiredError(false);
+      const sheetSummary = payload.sheetTabsCleared
+        ? ` và dọn Google Sheets ở ${payload.sheetTabsCleared} tab`
+        : "";
+      setStatus(
+        payload.warning ||
+          `Đã xóa ${payload.removed || 0} dòng dữ liệu${sheetSummary}.`
+      );
+    } catch (error) {
+      setStatus(error.message || "Khong xoa duoc du lieu.");
+    } finally {
+      setIsClearingData(false);
+    }
   }
 
   async function submitPreparedMessage(message, effectiveSettings, supplier, images = []) {
@@ -3556,6 +3599,19 @@ function resolveSalePrice(row) {
                 )}
               </small>
             </label>
+
+            <div className="settings-actions data-reset-actions">
+              <button
+                className="secondary-button danger-button"
+                type="button"
+                onClick={clearAllData}
+                disabled={isClearingData}
+                title="Xóa toàn bộ dữ liệu bảng, chat và Google Sheets"
+              >
+                <Trash2 size={17} />
+                <span>{isClearingData ? "Đang xóa" : "Xóa toàn bộ dữ liệu"}</span>
+              </button>
+            </div>
           </article>
         </section>
       </main>

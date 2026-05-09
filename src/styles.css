@@ -992,6 +992,21 @@ select:focus {
   background: #e5f3ef;
 }
 
+.secondary-button.danger-button {
+  border-color: #efc0b5;
+  color: #8e3b2d;
+  background: #fff0e8;
+}
+
+.secondary-button.danger-button:hover {
+  border-color: #e4a792;
+  background: #ffe6dc;
+}
+
+.settings-actions.data-reset-actions {
+  justify-content: flex-end;
+}
+
 .primary-button:disabled,
 .secondary-button:disabled {
   cursor: not-allowed;
