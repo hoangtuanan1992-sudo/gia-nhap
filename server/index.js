@@ -67,6 +67,9 @@ const DEFAULT_AI_ROUTING_MODE = "supplier-profile";
 const DEFAULT_OPENAI_MINI_MODEL = "gpt-4.1-mini";
 const DEFAULT_OPENAI_STRONG_MODEL = "gpt-4.1";
 const DEFAULT_AI_PROFILE_MIN_LINES = 80;
+const DEFAULT_APP_ROLE_TEXT = "Bạn là trợ lý nhập liệu sản phẩm cho đội mua hàng.";
+const DEFAULT_APP_RULES_TEXT =
+  "Dữ liệu thường là bảng giá nhà cung cấp điện máy. Bỏ qua tiêu đề nhóm, dòng trống, dòng ***; dùng tiêu đề nhóm làm ngữ cảnh ngành hàng/thương hiệu. Không tự bịa giá.";
 
 const app = express();
 
@@ -815,10 +818,93 @@ function getAppSettingsForShop(shopId = "") {
   return getRuntimeForShop(shopId).appSettings || null;
 }
 
+function looksLikeSettingsEncodingDamage(value = "") {
+  const text = clean(value);
+  if (!text) {
+    return false;
+  }
+
+  return (
+    text.includes("�") ||
+    /(?:B\?n|D\? li\?u|tr\?|l\?|nh\?p|li\?u|s\?n|ph\?m|d\?i|gi�|nh�|c\?p|di\?n|m�y|ti�u|d�ng|l�m|ng\?|c\?nh|Kh�ng|b\?a|qu�n|Xu�n|T�n|Vi\?t|B�|B\?p|H�ng|Ph�t)/i.test(
+      text
+    )
+  );
+}
+
+function protectSettingsTextEncoding(nextValue = "", previousValue = "", fallbackValue = "") {
+  const nextText = clean(nextValue);
+  if (!nextText || !looksLikeSettingsEncodingDamage(nextText)) {
+    return nextValue;
+  }
+
+  const previousText = clean(previousValue);
+  if (previousText && !looksLikeSettingsEncodingDamage(previousText)) {
+    return previousValue;
+  }
+
+  return fallbackValue || nextValue;
+}
+
+function previousSupplierSettings(previousSettings = {}, supplier = {}, index = 0) {
+  const suppliers = Array.isArray(previousSettings.suppliers) ? previousSettings.suppliers : [];
+  const supplierId = clean(supplier.id);
+  if (supplierId) {
+    const matched = suppliers.find((item) => clean(item?.id) === supplierId);
+    if (matched) {
+      return matched;
+    }
+  }
+
+  return suppliers[index] || {};
+}
+
+function sanitizeAppSettingsEncoding(settings = {}, previousSettings = {}) {
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+    return settings;
+  }
+
+  const next = {
+    ...settings,
+    role: protectSettingsTextEncoding(settings.role, previousSettings?.role, DEFAULT_APP_ROLE_TEXT),
+    rules: protectSettingsTextEncoding(settings.rules, previousSettings?.rules, DEFAULT_APP_RULES_TEXT)
+  };
+
+  if (settings.columnRules && typeof settings.columnRules === "object" && !Array.isArray(settings.columnRules)) {
+    const previousColumnRules =
+      previousSettings?.columnRules && typeof previousSettings.columnRules === "object"
+        ? previousSettings.columnRules
+        : {};
+    next.columnRules = Object.fromEntries(
+      Object.entries(settings.columnRules).map(([key, value]) => [
+        key,
+        protectSettingsTextEncoding(value, previousColumnRules[key])
+      ])
+    );
+  }
+
+  if (Array.isArray(settings.suppliers)) {
+    next.suppliers = settings.suppliers.map((supplier, index) => {
+      const previousSupplier = previousSupplierSettings(previousSettings, supplier, index);
+      return {
+        ...supplier,
+        name: protectSettingsTextEncoding(supplier.name, previousSupplier.name),
+        workflowRule: protectSettingsTextEncoding(supplier.workflowRule, previousSupplier.workflowRule),
+        giftRule: protectSettingsTextEncoding(supplier.giftRule, previousSupplier.giftRule),
+        aiProfile: protectSettingsTextEncoding(supplier.aiProfile, previousSupplier.aiProfile)
+      };
+    });
+  }
+
+  return next;
+}
+
 function setAppSettingsForShop(shopId = "", settings = null) {
   const targetConfig = getRuntimeForShop(shopId);
   targetConfig.appSettings =
-    settings && typeof settings === "object" && !Array.isArray(settings) ? settings : null;
+    settings && typeof settings === "object" && !Array.isArray(settings)
+      ? sanitizeAppSettingsEncoding(settings, targetConfig.appSettings || {})
+      : null;
 }
 
 function enqueueShopStoreWrite(shopId, task) {
@@ -2988,6 +3074,56 @@ function normalizationLooksIncomplete(result = {}, message = "") {
   return expectedRows >= 20 && actualRows < Math.ceil(expectedRows * 0.7);
 }
 
+function appendResultWarning(result = {}, warning = "") {
+  const nextWarning = clean(warning);
+  if (!nextWarning) {
+    return result;
+  }
+
+  return {
+    ...result,
+    warning: [result.warning, nextWarning].map(clean).filter(Boolean).join(" ")
+  };
+}
+
+function recoverIncompleteResultFromLocalParser(result = {}, message = "", settings = {}, localRows = []) {
+  const expectedRows = countLikelySupplierPriceLines(message);
+  const aiRows = sanitizeProductRows(result.rows || []);
+
+  if (expectedRows < 20 || aiRows.length >= Math.ceil(expectedRows * 0.7)) {
+    return result;
+  }
+
+  const parsedLocalRows = sanitizeProductRows(localRows);
+  const localLooksComplete = supplierTableParseLooksComplete(message, parsedLocalRows);
+  const localLooksUseful =
+    parsedLocalRows.length >= Math.ceil(expectedRows * 0.7) && parsedLocalRows.length > aiRows.length + 5;
+
+  if (localLooksComplete || localLooksUseful) {
+    return appendResultWarning(
+      {
+        ...result,
+        reply: `Da chuan hoa ${parsedLocalRows.length} dong bang parser cuc bo vi AI tra thieu dong.`,
+        rows: parsedLocalRows,
+        recoveredFromLocalParser: true,
+        expectedSourceRows: expectedRows,
+        aiReturnedRows: aiRows.length
+      },
+      `AI chi tra ${aiRows.length}/${expectedRows} dong co ve co ma/gia; da dung parser cuc bo lay ${parsedLocalRows.length} dong.`
+    );
+  }
+
+  return appendResultWarning(
+    {
+      ...result,
+      incompleteSourceRows: true,
+      expectedSourceRows: expectedRows,
+      aiReturnedRows: aiRows.length
+    },
+    `Canh bao: AI chi tra ${aiRows.length}/${expectedRows} dong co ve co ma/gia trong nguon. He thong chua luu ket qua thieu dong nay va chua luu ho so AI tu lan hoc nay.`
+  );
+}
+
 async function resolveAiModelRoute({ provider, message, settings = {}, config = runtimeConfig, shopId = "admin" }) {
   const normalizedProvider = normalizeProvider(provider);
   const baseModel = getRuntimeModel(normalizedProvider, config);
@@ -3628,17 +3764,33 @@ async function normalizeChunkedWithProvider(provider, message, settings, images 
 
   const forceAiNormalization = settings.forceAiNormalization === true;
   const localRows = parseSupplierPriceTable(message, settings);
-  if (!forceAiNormalization && supplierTableParseLooksComplete(message, localRows)) {
-    return {
+  if (supplierTableParseLooksComplete(message, localRows)) {
+    const localResult = {
       reply: `Mình đã tách được ${localRows.length} dòng từ bảng giá nhà cung cấp.`,
       rows: localRows
     };
+
+    if (forceAiNormalization) {
+      return appendResultWarning(
+        {
+          ...localResult,
+          recoveredFromLocalParser: true,
+          skippedAiBecauseLocalComplete: true,
+          expectedSourceRows: countLikelySupplierPriceLines(message),
+          aiReturnedRows: 0
+        },
+        "Du lieu co cau truc ma/gia ro; da dung parser cuc bo de lay du dong thay vi bat AI tra JSON qua dai."
+      );
+    }
+
+    return localResult;
   }
 
   try {
     const chunks = splitMessageForApi(message);
     if (chunks.length === 1) {
-      return normalizeProviderWithRetries(provider, message, settings, [], config);
+      const result = await normalizeProviderWithRetries(provider, message, settings, [], config);
+      return recoverIncompleteResultFromLocalParser(result, message, settings, localRows);
     }
 
     const rows = [];
@@ -3651,11 +3803,16 @@ async function normalizeChunkedWithProvider(provider, message, settings, images 
       }
     }
 
-    return {
-      reply: `Da chuan hoa ${rows.length} dong tu ${chunks.length} phan du lieu.`,
-      rows,
-      warning: warnings.filter(Boolean).join(" ")
-    };
+    return recoverIncompleteResultFromLocalParser(
+      {
+        reply: `Da chuan hoa ${rows.length} dong tu ${chunks.length} phan du lieu.`,
+        rows,
+        warning: warnings.filter(Boolean).join(" ")
+      },
+      message,
+      settings,
+      localRows
+    );
   } catch (error) {
     if (localRows.length) {
       return {
@@ -4407,6 +4564,28 @@ app.post("/api/chat", async (req, res, next) => {
       return;
     }
 
+    if (result.skippedAiBecauseLocalComplete && modelRoute.routingApplied) {
+      const routedSupplierName = supplierFromSettings(settings) || "nay";
+      modelRouteWarning = `Du lieu NCC ${routedSupplierName} co cau truc ma/gia ro; da dung parser cuc bo de lay du dong thay vi bat AI tra JSON qua dai.`;
+    }
+
+    if (result.incompleteSourceRows) {
+      res.status(422).json({
+        error:
+          result.warning ||
+          `AI chi tra ${result.aiReturnedRows || 0}/${result.expectedSourceRows || 0} dong co ve co ma/gia. He thong chua luu ket qua thieu dong nay.`,
+        modelUsed: effectiveModel,
+        modelRouting: modelRoute.routingApplied
+          ? {
+              mode: settings.aiRoutingMode || DEFAULT_AI_ROUTING_MODE,
+              model: effectiveModel,
+              learnedProfile: false
+            }
+          : null
+      });
+      return;
+    }
+
     const batchId = randomUUID();
     const createdAt = new Date().toISOString();
     const activeSupplierName = supplierFromSettings(settings);
@@ -4422,14 +4601,16 @@ app.post("/api/chat", async (req, res, next) => {
     rows = rows.filter((row) => !productCodeAppearsOnlyAfterPrice(message, row.productCode));
     rows = applySalePriceVisibility(rows, settings);
     let updatedSettings = null;
-    if (modelRoute.shouldLearnProfile && rows.length) {
+    if (modelRoute.shouldLearnProfile && rows.length && !result.incompleteSourceRows) {
       const baseSettings = getAppSettingsForShop(shopId) || settings;
-      const learnedProfile = buildSupplierAiProfile(message, rows, { model: effectiveModel });
+      const learnedProfile = buildSupplierAiProfile(message, rows, {
+        model: result.recoveredFromLocalParser ? `${effectiveModel}+local-parser` : effectiveModel
+      });
       updatedSettings = settingsWithSupplierAiProfile(
         baseSettings,
         settings.activeSupplier || supplierConfigForName(baseSettings, activeSupplierName) || {},
         learnedProfile,
-        effectiveModel
+        result.recoveredFromLocalParser ? `${effectiveModel}+local-parser` : effectiveModel
       );
       setAppSettingsForShop(shopId, updatedSettings);
       await saveRuntimeConfig();
