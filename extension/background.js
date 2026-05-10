@@ -1,120 +1,7 @@
-const GIANHAP_URL_PATTERNS = [
-  "https://gianhap.id.vn/*",
-  "https://www.gianhap.id.vn/*",
-  "http://localhost/*",
-  "http://127.0.0.1/*"
-];
-const DRAFT_KEY = "gianhapPopupDraft";
+const DRAFT_KEY = "gianhapZaloDraft";
 
 async function queryTabs(queryInfo) {
   return chrome.tabs.query(queryInfo);
-}
-
-async function findGianhapTab() {
-  for (const url of GIANHAP_URL_PATTERNS) {
-    const tabs = await queryTabs({ url });
-    const tab = tabs.find((item) => item.id && !item.discarded);
-    if (tab) {
-      return tab;
-    }
-  }
-
-  return null;
-}
-
-function isInjectableUrl(url = "") {
-  return /^https?:\/\//i.test(url);
-}
-
-function isMissingReceiverError(message = "") {
-  return message.includes("Receiving end does not exist") || message.includes("Could not establish connection");
-}
-
-async function injectContentScript(tab, file) {
-  if (!tab?.id || !isInjectableUrl(tab.url)) {
-    return {
-      ok: false,
-      error: "Tab hien tai khong cho extension ket noi."
-    };
-  }
-
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      files: [file]
-    });
-    return { ok: true };
-  } catch (error) {
-    return {
-      ok: false,
-      error: error.message || "Khong the gan extension vao tab."
-    };
-  }
-}
-
-async function sendToTab(tab, message, fallbackFile) {
-  const sendPromise = (async () => {
-  try {
-    return await chrome.tabs.sendMessage(tab.id, message);
-  } catch (error) {
-    if (fallbackFile && isMissingReceiverError(error.message || "")) {
-      const injected = await injectContentScript(tab, fallbackFile);
-      if (!injected.ok) {
-        return injected;
-      }
-
-      try {
-        return await chrome.tabs.sendMessage(tab.id, message);
-      } catch (retryError) {
-        return {
-          ok: false,
-          error: retryError.message || "Khong ket noi duoc tab sau khi gan extension."
-        };
-      }
-    }
-
-    return {
-      ok: false,
-      error: error.message || "Khong ket noi duoc tab."
-    };
-  }
-  })();
-
-  if (message?.type !== "GIANHAP_IMPORT") {
-    return sendPromise;
-  }
-
-  return Promise.race([
-    sendPromise,
-    new Promise((resolve) => {
-      setTimeout(() => {
-        resolve({
-          ok: true,
-          queued: true,
-          timeout: true
-        });
-      }, 5000);
-    })
-  ]);
-}
-
-async function getActiveSelection() {
-  const [activeTab] = await queryTabs({ active: true, currentWindow: true });
-  if (!activeTab?.id) {
-    return {
-      ok: false,
-      error: "Khong tim thay tab hien tai."
-    };
-  }
-
-  if (!/zalo\.me/i.test(activeTab.url || "")) {
-    return {
-      ok: false,
-      error: "Hay mo tab Zalo Web, boi den doan chat roi bam extension."
-    };
-  }
-
-  return sendToTab(activeTab, { type: "ZALO_GET_SELECTION" }, "content/zalo.js");
 }
 
 function splitSegments(text) {
@@ -127,6 +14,74 @@ function splitSegments(text) {
 
 function joinSegments(segments) {
   return segments.map((segment) => segment.trim()).join("\n\n---\n\n");
+}
+
+function isMissingReceiverError(message = "") {
+  return message.includes("Receiving end does not exist") || message.includes("Could not establish connection");
+}
+
+async function injectZaloContentScript(tab) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ["content/zalo.js"]
+    });
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error.message || "Khong the gan extension vao Zalo Web."
+    };
+  }
+}
+
+async function sendToZaloTab(tab, message) {
+  try {
+    return await chrome.tabs.sendMessage(tab.id, message);
+  } catch (error) {
+    if (!isMissingReceiverError(error.message || "")) {
+      return {
+        ok: false,
+        error: error.message || "Khong ket noi duoc Zalo Web."
+      };
+    }
+
+    const injected = await injectZaloContentScript(tab);
+    if (!injected.ok) {
+      return injected;
+    }
+
+    try {
+      return await chrome.tabs.sendMessage(tab.id, message);
+    } catch (retryError) {
+      return {
+        ok: false,
+        error: retryError.message || "Khong ket noi duoc Zalo Web."
+      };
+    }
+  }
+}
+
+async function getActiveZaloTab() {
+  const [activeTab] = await queryTabs({ active: true, currentWindow: true });
+  if (activeTab?.id && /zalo\.me/i.test(activeTab.url || "")) {
+    return activeTab;
+  }
+
+  const zaloTabs = await queryTabs({ url: ["https://chat.zalo.me/*", "https://*.zalo.me/*"] });
+  return zaloTabs.find((tab) => tab.id && !tab.discarded) || null;
+}
+
+async function setZaloPickMode(enabled = true) {
+  const tab = await getActiveZaloTab();
+  if (!tab?.id) {
+    return {
+      ok: false,
+      error: "Hay mo tab Zalo Web de bam chon tung doan chat."
+    };
+  }
+
+  return sendToZaloTab(tab, { type: "ZALO_SET_PICK_MODE", enabled });
 }
 
 async function addDraftSegment(text, sender) {
@@ -150,7 +105,6 @@ async function addDraftSegment(text, sender) {
   }
 
   const nextDraft = {
-    ...draft,
     text: joinSegments(segments),
     selectedSegments: segments,
     savedAt: Date.now()
@@ -175,544 +129,12 @@ async function addDraftSegment(text, sender) {
   };
 }
 
-async function getActiveZaloTab() {
-  const [activeTab] = await queryTabs({ active: true, currentWindow: true });
-  if (activeTab?.id && /zalo\.me/i.test(activeTab.url || "")) {
-    return activeTab;
-  }
-
-  const zaloTabs = await queryTabs({ url: ["https://chat.zalo.me/*", "https://*.zalo.me/*"] });
-  return zaloTabs.find((tab) => tab.id && !tab.discarded) || null;
-}
-
-async function setZaloPickMode(enabled = true) {
-  const tab = await getActiveZaloTab();
-  if (!tab?.id) {
-    return {
-      ok: false,
-      error: "Hay mo tab Zalo Web de bam chon tung doan chat."
-    };
-  }
-
-  return sendToTab(tab, { type: "ZALO_SET_PICK_MODE", enabled }, "content/zalo.js");
-}
-
-async function getGianhapState() {
-  const tab = await findGianhapTab();
-  if (!tab?.id) {
-    return {
-      ok: false,
-      error: "Hay mo tab gianhap.id.vn va dang nhap truoc."
-    };
-  }
-
-  const response = await sendToTab(tab, { type: "GIANHAP_GET_STATE" }, "content/gianhap.js");
-  return {
-    ...response,
-    tabId: tab.id,
-    tabUrl: tab.url
-  };
-}
-
-async function diagnoseGianhap() {
-  const tab = await findGianhapTab();
-  if (!tab?.id) {
-    return {
-      ok: false,
-      error: "Khong tim thay tab gianhap.id.vn dang mo."
-    };
-  }
-
-  try {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      world: "MAIN",
-      func: async () => {
-        function requestBridge(action, payload = {}, timeoutMs = 2500) {
-          const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-          const requestType = "__GIANHAP_EXTENSION_REQUEST__";
-          const responseType = "__GIANHAP_EXTENSION_RESPONSE__";
-
-          return new Promise((resolve) => {
-            const timeout = setTimeout(() => {
-              window.removeEventListener("message", handleMessage);
-              resolve({
-                ok: false,
-                error: "Bridge khong phan hoi trong thoi gian cho."
-              });
-            }, timeoutMs);
-
-            function handleMessage(event) {
-              if (event.source !== window) {
-                return;
-              }
-
-              const data = event.data || {};
-              if (data.type !== responseType || data.id !== id) {
-                return;
-              }
-
-              clearTimeout(timeout);
-              window.removeEventListener("message", handleMessage);
-              resolve(data);
-            }
-
-            window.addEventListener("message", handleMessage);
-            window.postMessage(
-              {
-                type: requestType,
-                id,
-                action,
-                ...payload
-              },
-              window.location.origin
-            );
-          });
-        }
-
-        function requestEventBridge(action, payload = {}, timeoutMs = 2500) {
-          const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-          const requestType = "__GIANHAP_EXTENSION_REQUEST__";
-          const responseType = "__GIANHAP_EXTENSION_RESPONSE__";
-
-          return new Promise((resolve) => {
-            const timeout = setTimeout(() => {
-              window.removeEventListener("gianhap-extension-response", handleResponse);
-              resolve({
-                ok: false,
-                error: "Event bridge khong phan hoi trong thoi gian cho."
-              });
-            }, timeoutMs);
-
-            function handleResponse(event) {
-              const data = event.detail || {};
-              if (data.type !== responseType || data.id !== id) {
-                return;
-              }
-
-              clearTimeout(timeout);
-              window.removeEventListener("gianhap-extension-response", handleResponse);
-              resolve(data);
-            }
-
-            window.addEventListener("gianhap-extension-response", handleResponse);
-            window.dispatchEvent(new CustomEvent("gianhap-extension-command", {
-              detail: {
-                type: requestType,
-                id,
-                action,
-                ...payload
-              }
-            }));
-          });
-        }
-
-        const composer = document.querySelector(".chat-composer");
-        const textarea = composer?.querySelector("textarea") || null;
-        const sendButton = composer?.querySelector(".send-button") || null;
-        const bridge = await requestBridge("getState", {}, 2500);
-        const eventBridge = await requestEventBridge("getState", {}, 2500);
-        const composerChips = [...(composer?.querySelectorAll(".supplier-chip") || [])].map((chip) => ({
-          text: chip.textContent.trim(),
-          active: chip.classList.contains("active"),
-          disabled: Boolean(chip.disabled),
-          className: String(chip.className || "")
-        }));
-        const allChips = [...document.querySelectorAll(".supplier-chip")].map((chip) => chip.textContent.trim()).slice(0, 30);
-
-        return {
-          href: location.href,
-          title: document.title,
-          readyState: document.readyState,
-          lastExtensionImport: window.__gianhapLastExtensionImport || null,
-          lastExtensionImportResult: window.__gianhapLastExtensionImportResult || null,
-          queuedImport: window.__gianhapExtensionQueuedImport
-            ? {
-                id: window.__gianhapExtensionQueuedImport.id || "",
-                supplierId: window.__gianhapExtensionQueuedImport.supplierId || "",
-                supplierName: window.__gianhapExtensionQueuedImport.supplierName || "",
-                textLength: String(window.__gianhapExtensionQueuedImport.text || "").length,
-                queuedAt: window.__gianhapExtensionQueuedImport.queuedAt || ""
-              }
-            : null,
-          hasLoginCard: Boolean(document.querySelector(".login-card")),
-          hasComposer: Boolean(composer),
-          hasTextarea: Boolean(textarea),
-          textareaPlaceholder: textarea?.placeholder || "",
-          textareaLength: textarea?.value?.length || 0,
-          hasSendButton: Boolean(sendButton),
-          sendButtonDisabled: sendButton ? Boolean(sendButton.disabled) : null,
-          sendButtonText: sendButton?.textContent?.trim() || "",
-          composerSupplierCount: composerChips.length,
-          composerSuppliers: composerChips,
-          allSupplierCount: document.querySelectorAll(".supplier-chip").length,
-          allSuppliersPreview: allChips,
-          bridge,
-          eventBridge
-        };
-      }
-    });
-
-    return {
-      ok: true,
-      tabId: tab.id,
-      tabUrl: tab.url,
-      diagnostics: results?.[0]?.result || {}
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      error: error.message || "Khong the kiem tra tab gianhap.id.vn."
-    };
-  }
-}
-
-async function executeGianhapDomImport(tab, payload) {
-  try {
-    const executePromise = chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      world: "MAIN",
-      args: [payload],
-      func: async (payload) => {
-        function requestPageBridge(action, payload = {}, timeoutMs = 2500) {
-          const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-          const requestType = "__GIANHAP_EXTENSION_REQUEST__";
-          const responseType = "__GIANHAP_EXTENSION_RESPONSE__";
-
-          return new Promise((resolve) => {
-            const timeout = setTimeout(() => {
-              window.removeEventListener("message", handleMessage);
-              resolve({
-                ok: false,
-                error: "Bridge tren gianhap.id.vn chua phan hoi."
-              });
-            }, timeoutMs);
-
-            function handleMessage(event) {
-              if (event.source !== window) {
-                return;
-              }
-
-              const data = event.data || {};
-              if (data.type !== responseType || data.id !== id) {
-                return;
-              }
-
-              clearTimeout(timeout);
-              window.removeEventListener("message", handleMessage);
-              resolve(data);
-            }
-
-            window.addEventListener("message", handleMessage);
-            window.postMessage(
-              {
-                type: requestType,
-                id,
-                action,
-                ...payload
-              },
-              window.location.origin
-            );
-          });
-        }
-
-        function requestPageEventBridge(action, payload = {}, timeoutMs = 2500) {
-          const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-          const requestType = "__GIANHAP_EXTENSION_REQUEST__";
-          const responseType = "__GIANHAP_EXTENSION_RESPONSE__";
-
-          return new Promise((resolve) => {
-            const timeout = setTimeout(() => {
-              window.removeEventListener("gianhap-extension-response", handleResponse);
-              resolve({
-                ok: false,
-                error: "Event bridge tren gianhap.id.vn chua phan hoi."
-              });
-            }, timeoutMs);
-
-            function handleResponse(event) {
-              const data = event.detail || {};
-              if (data.type !== responseType || data.id !== id) {
-                return;
-              }
-
-              clearTimeout(timeout);
-              window.removeEventListener("gianhap-extension-response", handleResponse);
-              resolve(data);
-            }
-
-            window.addEventListener("gianhap-extension-response", handleResponse);
-            window.dispatchEvent(new CustomEvent("gianhap-extension-command", {
-              detail: {
-                type: requestType,
-                id,
-                action,
-                ...payload
-              }
-            }));
-          });
-        }
-
-        function wait(ms) {
-          return new Promise((resolve) => setTimeout(resolve, ms));
-        }
-
-        async function waitForFrame() {
-          return new Promise((resolve) => requestAnimationFrame(resolve));
-        }
-
-        async function waitUntil(predicate, timeoutMs = 3500, intervalMs = 80) {
-          const startedAt = Date.now();
-          while (Date.now() - startedAt < timeoutMs) {
-            if (predicate()) {
-              return true;
-            }
-            await wait(intervalMs);
-          }
-          return Boolean(predicate());
-        }
-
-        function normalizeSearch(value) {
-          return String(value || "")
-            .normalize("NFD")
-            .replace(/[\u0300-\u036f]/g, "")
-            .replace(/đ/g, "d")
-            .replace(/Đ/g, "D")
-            .toLowerCase()
-            .trim();
-        }
-
-        function setNativeValue(element, value) {
-          const setter =
-            Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set ||
-            Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
-
-          if (setter) {
-            setter.call(element, value);
-          } else {
-            element.value = value;
-          }
-
-          element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
-          element.dispatchEvent(new Event("change", { bubbles: true }));
-        }
-
-        const text = String(payload.text || "").trim();
-        if (!text) {
-          return { ok: false, error: "Chua co noi dung chat de gui." };
-        }
-
-        function queuePageImport(reason = "", diagnostics = {}) {
-          const queueId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-          const queuedImport = {
-            id: queueId,
-            text,
-            supplierId: String(payload.supplierId || ""),
-            supplierName: String(payload.supplierName || ""),
-            giftResolution: payload.giftResolution || null,
-            queuedAt: new Date().toISOString()
-          };
-          const queuedResult = {
-            ok: false,
-            queued: true,
-            id: queueId,
-            reason,
-            queuedAt: new Date().toISOString()
-          };
-          const script = document.createElement("script");
-          script.textContent = `
-            window.__gianhapExtensionQueuedImport = ${JSON.stringify(queuedImport)};
-            window.__gianhapLastExtensionImportResult = ${JSON.stringify(queuedResult)};
-            window.dispatchEvent(new CustomEvent("gianhap-extension-queued-import", { detail: window.__gianhapExtensionQueuedImport }));
-          `;
-          (document.documentElement || document.head || document.body).appendChild(script);
-          script.remove();
-
-          return {
-            ok: true,
-            queued: true,
-            usedQueue: true,
-            queueId,
-            supplierId: String(payload.supplierId || ""),
-            supplierName: String(payload.supplierName || ""),
-            diagnostics
-          };
-        }
-
-        const bridgeDiagnostics = {};
-        const eventBridgeState = await requestPageEventBridge("getState", {}, 2500);
-        const bridgeState = eventBridgeState?.ok
-          ? eventBridgeState
-          : await requestPageBridge("getState", {}, 2500);
-        bridgeDiagnostics.state = {
-          eventBridge: eventBridgeState,
-          postMessageBridge: bridgeState
-        };
-
-        if (bridgeState?.ok) {
-          if (!bridgeState.supportsQueuedImport) {
-            return {
-              ok: false,
-              error: "Tab gianhap.id.vn chua co queue bridge moi. Hay deploy lai dist va refresh tab gianhap.id.vn.",
-              diagnostics: bridgeDiagnostics
-            };
-          }
-
-          return queuePageImport(
-            "Da gui nhanh payload vao queue noi bo cua gianhap.id.vn.",
-            bridgeDiagnostics
-          );
-        }
-
-        const composer = document.querySelector(".chat-composer");
-        if (!composer) {
-          return {
-            ok: false,
-            error: "Khong tim thay khung chat tren gianhap.id.vn.",
-            diagnostics: bridgeDiagnostics
-          };
-        }
-
-        const supplierKey = normalizeSearch(payload.supplierName || "");
-        const supplierId = String(payload.supplierId || "");
-        const chips = [...composer.querySelectorAll(".supplier-chip"), ...document.querySelectorAll(".supplier-chip")];
-        const uniqueChips = [...new Set(chips)];
-        const supplierChip =
-          uniqueChips.find((chip) => chip.dataset?.supplierId === supplierId) ||
-          uniqueChips.find((chip) => normalizeSearch(chip.textContent) === supplierKey) ||
-          uniqueChips.find((chip) => supplierKey && normalizeSearch(chip.textContent).includes(supplierKey));
-
-        if (!supplierChip) {
-          return {
-            ok: false,
-            error: `Khong tim thay NCC "${payload.supplierName || payload.supplierId}" tren gianhap.id.vn.`,
-            diagnostics: {
-              ...bridgeDiagnostics,
-              availableSuppliers: uniqueChips.map((chip) => chip.textContent.trim()).slice(0, 30)
-            }
-          };
-        }
-
-        if (supplierChip) {
-          supplierChip.click();
-          await waitForFrame();
-          await wait(350);
-        }
-
-        const textarea = composer.querySelector("textarea");
-        if (!textarea) {
-          return {
-            ok: false,
-            error: "Khong tim thay o nhap chat tren gianhap.id.vn.",
-            diagnostics: bridgeDiagnostics
-          };
-        }
-
-        textarea.focus();
-        setNativeValue(textarea, text);
-        await waitForFrame();
-        await wait(250);
-
-        if (textarea.value.trim() !== text) {
-          setNativeValue(textarea, text);
-          await wait(250);
-        }
-
-        const sendButton = composer.querySelector(".send-button");
-        if (!sendButton) {
-          return {
-            ok: false,
-            error: "Khong tim thay nut Gui tren gianhap.id.vn.",
-            diagnostics: bridgeDiagnostics
-          };
-        }
-
-        await waitUntil(() => !sendButton.disabled, 3000, 80);
-        if (sendButton.disabled && supplierChip) {
-          supplierChip.click();
-          await wait(350);
-          setNativeValue(textarea, text);
-          await waitUntil(() => !sendButton.disabled, 2500, 80);
-        }
-
-        if (sendButton.disabled) {
-          return {
-            ok: false,
-            error: "Da dien du lieu nhung nut Gui cua gianhap.id.vn van bi khoa.",
-            diagnostics: {
-              ...bridgeDiagnostics,
-              selectedSupplier: supplierChip.textContent.trim(),
-              textareaLength: textarea.value.trim().length,
-              sendButtonDisabled: Boolean(sendButton.disabled)
-            }
-          };
-        }
-
-        sendButton.click();
-        return {
-          ok: true,
-          usedDomFallback: true,
-          supplierId,
-          supplierName: supplierChip?.textContent?.trim() || payload.supplierName || "",
-          diagnostics: bridgeDiagnostics
-        };
-      }
-    });
-
-    const results = await Promise.race([
-      executePromise,
-      new Promise((resolve) => {
-        setTimeout(() => {
-          resolve([
-            {
-              result: {
-                ok: false,
-                error: "Qua 25 giay van chua thao tac xong tren gianhap.id.vn. Bam nut kiem tra ket noi de lay debug."
-              }
-            }
-          ]);
-        }, 25000);
-      })
-    ]);
-
-    return results?.[0]?.result || {
-      ok: false,
-      error: "Khong nhan duoc ket qua tu tab gianhap.id.vn."
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      error: error.message || "Khong the thao tac tren tab gianhap.id.vn."
-    };
-  }
-}
-
-async function importToGianhap(payload) {
-  const tab = await findGianhapTab();
-  if (!tab?.id) {
-    return {
-      ok: false,
-      error: "Hay mo tab gianhap.id.vn va dang nhap truoc."
-    };
-  }
-
-  const response = await executeGianhapDomImport(tab, payload);
-
-  return response;
-}
-
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message?.type) {
     return false;
   }
 
   const handlers = {
-    POPUP_GET_SELECTION: getActiveSelection,
-    POPUP_GET_GIANHAP_STATE: getGianhapState,
-    POPUP_IMPORT_TO_GIANHAP: () => importToGianhap(message),
-    SIDE_PANEL_GET_GIANHAP_STATE: getGianhapState,
-    SIDE_PANEL_DIAGNOSE_GIANHAP: diagnoseGianhap,
-    SIDE_PANEL_IMPORT_TO_GIANHAP: () => importToGianhap(message),
     SIDE_PANEL_START_ZALO_PICK: () => setZaloPickMode(true),
     SIDE_PANEL_STOP_ZALO_PICK: () => setZaloPickMode(false),
     ZALO_CHAT_SEGMENT_SELECTED: () => addDraftSegment(message.text, sender)

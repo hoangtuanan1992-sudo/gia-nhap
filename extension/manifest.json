@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "GIA NHAP Zalo Importer",
-  "description": "Chon doan chat tren Zalo Web va gui vao gianhap.id.vn dang mo.",
+  "name": "GIA NHAP Zalo Picker",
+  "description": "Chon nhieu doan chat lon tren Zalo Web va copy thu cong sang gianhap.id.vn.",
   "version": "0.1.0",
   "action": {
     "default_title": "Mo GIA NHAP panel"
@@ -15,21 +15,12 @@
   "permissions": ["activeTab", "scripting", "sidePanel", "storage", "tabs"],
   "host_permissions": [
     "https://chat.zalo.me/*",
-    "https://*.zalo.me/*",
-    "https://gianhap.id.vn/*",
-    "https://www.gianhap.id.vn/*",
-    "http://localhost/*",
-    "http://127.0.0.1/*"
+    "https://*.zalo.me/*"
   ],
   "content_scripts": [
     {
       "matches": ["https://chat.zalo.me/*", "https://*.zalo.me/*"],
       "js": ["content/zalo.js"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["https://gianhap.id.vn/*", "https://www.gianhap.id.vn/*", "http://localhost/*", "http://127.0.0.1/*"],
-      "js": ["content/gianhap.js"],
       "run_at": "document_idle"
     }
   ]

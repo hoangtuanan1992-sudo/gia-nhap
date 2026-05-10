@@ -1,6 +1,6 @@
-# GIA NHAP Zalo Importer
+# GIA NHAP Zalo Picker
 
-Chrome extension de bam chon tung doan chat tren Zalo Web va gui vao tab `gianhap.id.vn` da dang nhap.
+Chrome extension de bam chon nhieu doan chat lon tren Zalo Web, gom noi dung vao side panel va copy thu cong sang `gianhap.id.vn`.
 
 ## Cai dat thu cong
 
@@ -11,10 +11,10 @@ Chrome extension de bam chon tung doan chat tren Zalo Web va gui vao tab `gianha
 
 ## Cach dung
 
-1. Mo `https://gianhap.id.vn` va dang nhap san.
-2. Mo Zalo Web.
-3. Bam icon extension de mo panel ben phai.
-4. Bam truc tiep tung tin nhan/doan chat trong Zalo. Moi doan se tu nhay vao o chat cua extension.
-5. Chon nha cung cap, roi bam `Gui`.
+1. Mo Zalo Web.
+2. Bam icon extension de mo panel ben phai.
+3. Bam truc tiep tung tin nhan/doan chat trong Zalo. Moi doan se tu nhay vao o chat cua extension.
+4. Bam `Copy`.
+5. Dan noi dung thu cong vao `gianhap.id.vn`.
 
-Extension khong luu mat khau va khong dang nhap thay web. Du lieu duoc chuyen qua tab `gianhap.id.vn` dang mo bang content script.
+Extension khong ket noi, khong dang nhap, khong gui du lieu truc tiep vao `gianhap.id.vn`.

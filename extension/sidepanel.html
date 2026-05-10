@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>GIA NHAP Zalo Importer</title>
+    <title>GIA NHAP Zalo Picker</title>
     <link rel="stylesheet" href="sidepanel.css" />
   </head>
   <body>
@@ -20,16 +20,10 @@
         </div>
         <div class="title-block">
           <h1>Chuan hoa GIA NHAP</h1>
-          <p>AI Product Sheet</p>
+          <p>Zalo chat picker</p>
         </div>
         <div class="header-actions">
-          <button class="icon-button" id="diagnoseButton" type="button" title="Kiem tra ket noi">
-            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 20h9" />
-              <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
-            </svg>
-          </button>
-          <button class="icon-button" id="refreshButton" type="button" title="Lam moi NCC">
+          <button class="icon-button" id="refreshButton" type="button" title="Bat lai che do chon">
             <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 12a9 9 0 0 1-15.5 6.3" />
               <path d="M3 12A9 9 0 0 1 18.5 5.7" />
@@ -47,51 +41,18 @@
         </div>
       </header>
 
-      <section class="supplier-picker">
-        <div class="supplier-picker-top">
-          <span>Nha cung cap</span>
-          <label class="supplier-search">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="11" cy="11" r="7" />
-              <path d="m21 21-4.3-4.3" />
-            </svg>
-            <input id="supplierSearch" type="search" placeholder="Tim NCC..." autocomplete="off" />
-          </label>
-        </div>
-        <div class="supplier-chip-row" id="supplierList"></div>
-      </section>
-
       <section class="composer">
-        <textarea id="chatText" placeholder="Bam tung doan chat tren Zalo Web, noi dung se tu nhay vao day..."></textarea>
-        <form class="gift-prompt" id="giftPrompt" hidden>
-          <div class="gift-prompt-copy">
-            <p class="eyebrow">Ma qua tang moi</p>
-            <h2>Can khai bao truoc khi nhap</h2>
-            <p>
-              NCC <span id="giftSupplierName"></span> chua khai bao ma
-              <strong id="giftCode"></strong>.
-            </p>
-          </div>
-          <label>
-            <span>Gia tri qua tang</span>
-            <input id="giftValue" type="text" inputmode="numeric" placeholder="Vi du: 50000 hoac 50.000" />
-          </label>
-          <div class="gift-actions">
-            <button class="gift-secondary" id="giftSkipButton" type="button">Bo Qua</button>
-            <button class="gift-primary" type="submit">Nhap</button>
-          </div>
-        </form>
+        <textarea id="chatText" placeholder="Bam tung doan chat lon tren Zalo Web, noi dung se tu nhay vao day..."></textarea>
         <div class="composer-actions">
           <p id="statusText">Dang san sang chon tin nhan tren Zalo Web.</p>
-          <button class="send-button" id="sendButton" type="button" disabled>
+          <button class="copy-button" id="copyButton" type="button" disabled>
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="m22 2-7 20-4-9-9-4Z" />
-              <path d="M22 2 11 13" />
+              <rect x="9" y="9" width="13" height="13" rx="2" />
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
             </svg>
-            <span>Gui</span>
+            <span>Copy</span>
           </button>
         </div>
-        <pre class="debug-output" id="debugOutput" hidden></pre>
       </section>
     </main>
     <script src="sidepanel.js"></script>
