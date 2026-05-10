@@ -2581,6 +2581,7 @@ function resolveSalePrice(row) {
       if (unknownGiftCode) {
         window.__gianhapLastExtensionImportResult = {
           ok: false,
+          id: payload.id || "",
           needsGiftCode: true,
           giftCode: unknownGiftCode,
           supplierId: nextSupplier.id,
@@ -2592,6 +2593,7 @@ function resolveSalePrice(row) {
       }
 
       window.__gianhapLastExtensionImport = {
+        id: payload.id || "",
         supplierId: nextSupplier.id,
         supplierName: nextSupplier.name,
         textLength: message.length,
@@ -2606,6 +2608,7 @@ function resolveSalePrice(row) {
 
       window.__gianhapLastExtensionImportResult = {
         ok: true,
+        id: payload.id || "",
         supplierId: nextSupplier.id,
         supplierName: nextSupplier.name,
         textLength: message.length,
@@ -2631,6 +2634,7 @@ function resolveSalePrice(row) {
       processQueuedExtensionImport(payload).catch((error) => {
         window.__gianhapLastExtensionImportResult = {
           ok: false,
+          id: payload.id || "",
           error: error.message || "Khong nhan duoc du lieu tu extension.",
           finishedAt: new Date().toISOString()
         };

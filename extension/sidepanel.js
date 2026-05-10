@@ -341,6 +341,104 @@ async function diagnoseGianhap() {
   });
 }
 
+function wait(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function pollQueuedImport(queueId, supplierName) {
+  const startedAt = Date.now();
+  const timeoutMs = 65000;
+  setStatus(`Da chuyen vao hang doi. Dang cho gianhap.id.vn xu ly cho ${supplierName || state.selectedSupplierName}...`);
+
+  while (Date.now() - startedAt < timeoutMs) {
+    await wait(1800);
+    const response = await sendRuntimeMessage({ type: "SIDE_PANEL_DIAGNOSE_GIANHAP" }, 12000);
+    const diagnostics = response?.diagnostics || {};
+    const result = diagnostics.lastExtensionImportResult || null;
+    const queuedImport = diagnostics.queuedImport || null;
+
+    if (result?.id && queueId && result.id !== queueId) {
+      continue;
+    }
+
+    if (result?.queued) {
+      setDebugOutput({
+        queued: {
+          queueId,
+          supplierName: supplierName || state.selectedSupplierName
+        },
+        gianhap: {
+          lastExtensionImportResult: result,
+          queuedImport
+        }
+      });
+      continue;
+    }
+
+    if (result?.needsGiftCode) {
+      state.pendingGift = {
+        giftCode: result.giftCode || "",
+        supplierId: result.supplierId || state.selectedSupplierId,
+        supplierName: result.supplierName || supplierName || state.selectedSupplierName
+      };
+      renderGiftPrompt();
+      setStatus(`Can khai bao ma qua tang ${state.pendingGift.giftCode} truoc khi gui.`);
+      setDebugOutput({
+        queueId,
+        gianhap: {
+          lastExtensionImportResult: result,
+          queuedImport
+        }
+      });
+      return;
+    }
+
+    if (result?.ok) {
+      chrome.storage.local.remove(DRAFT_KEY);
+      elements.chatText.value = "";
+      state.selectedSegments = [];
+      clearPendingGift();
+      updateSendButtonState();
+      setStatus(`gianhap.id.vn da xu ly xong cho ${result.supplierName || supplierName || state.selectedSupplierName}.`);
+      setDebugOutput({
+        queueId,
+        gianhap: {
+          lastExtensionImportResult: result,
+          queuedImport
+        }
+      });
+      return;
+    }
+
+    if (result?.error) {
+      setStatus(result.error);
+      setDebugOutput({
+        queueId,
+        gianhap: {
+          lastExtensionImportResult: result,
+          queuedImport
+        }
+      });
+      return;
+    }
+
+    if (queuedImport?.id === queueId) {
+      setDebugOutput({
+        queued: {
+          queueId,
+          supplierName: supplierName || state.selectedSupplierName
+        },
+        gianhap: {
+          lastExtensionImportResult: result,
+          queuedImport
+        }
+      });
+    }
+  }
+
+  setStatus("Da chuyen vao hang doi nhung chua thay gianhap.id.vn xu ly xong. Bam Kiem tra ket noi de lay debug.");
+}
+
 async function sendToGianhap(options = {}) {
   const text = elements.chatText.value.trim();
   if (!text) {
@@ -415,16 +513,20 @@ async function sendToGianhap(options = {}) {
   }
 
   if (response.usedQueue) {
-    setStatus(`Da chuyen vao hang doi gianhap.id.vn cho ${response.supplierName || state.selectedSupplierName}.`);
+    chrome.storage.local.remove(DRAFT_KEY);
+    elements.chatText.value = "";
+    state.selectedSegments = [];
+    clearPendingGift();
+    updateSendButtonState();
+    setStatus(`Da gui sang gianhap.id.vn cho ${response.supplierName || state.selectedSupplierName}.`);
     setDebugOutput({
-      queued: {
+      sent: {
         queueId: response.queueId || "",
         supplierId: response.supplierId || state.selectedSupplierId,
         supplierName: response.supplierName || state.selectedSupplierName
       },
-      note: "Neu bang tren web chua cap nhat, bam Kiem tra ket noi de xem lastExtensionImportResult."
+      note: "gianhap.id.vn se tu goi API va xu ly tiep."
     });
-    saveDraft();
     return;
   }
 

@@ -549,7 +549,7 @@ async function executeGianhapDomImport(tab, payload) {
           postMessageBridge: bridgeState
         };
 
-        if (bridgeState?.ok && bridgeState.supportsImportV3) {
+        if (bridgeState?.ok) {
           if (!bridgeState.supportsQueuedImport) {
             return {
               ok: false,
@@ -558,61 +558,8 @@ async function executeGianhapDomImport(tab, payload) {
             };
           }
 
-          const hasGiftResolution = Boolean(payload.giftResolution?.code);
-          if (!hasGiftResolution) {
-            const eventGiftCheck = await requestPageEventBridge("checkGiftCode", payload, 5000);
-            const giftCheck = eventGiftCheck?.ok || eventGiftCheck?.needsGiftCode
-              ? eventGiftCheck
-              : await requestPageBridge("checkGiftCode", payload, 5000);
-            bridgeDiagnostics.giftCheck = {
-              eventBridge: eventGiftCheck,
-              postMessageBridge: giftCheck
-            };
-
-            if (giftCheck?.needsGiftCode) {
-              return {
-                ok: false,
-                needsGiftCode: true,
-                giftCode: giftCheck.giftCode || "",
-                supplierId: giftCheck.supplierId || payload.supplierId || "",
-                supplierName: giftCheck.supplierName || payload.supplierName || "",
-                diagnostics: bridgeDiagnostics
-              };
-            }
-          }
-
-          const eventBridgeResponse = await requestPageEventBridge("importChatV3", payload, 8000);
-          const bridgeResponse = eventBridgeResponse?.ok
-            ? eventBridgeResponse
-            : await requestPageBridge("importChatV3", payload, 5000);
-          bridgeDiagnostics.import = {
-            eventBridge: eventBridgeResponse,
-            postMessageBridge: bridgeResponse
-          };
-
-          if (bridgeResponse?.ok) {
-            return {
-              ok: true,
-              usedBridge: true,
-              supplierId: bridgeResponse.supplierId || payload.supplierId || "",
-              supplierName: bridgeResponse.supplierName || payload.supplierName || "",
-              diagnostics: bridgeDiagnostics
-            };
-          }
-
-          if (bridgeResponse?.needsGiftCode) {
-            return {
-              ok: false,
-              needsGiftCode: true,
-              giftCode: bridgeResponse.giftCode || "",
-              supplierId: bridgeResponse.supplierId || payload.supplierId || "",
-              supplierName: bridgeResponse.supplierName || payload.supplierName || "",
-              diagnostics: bridgeDiagnostics
-            };
-          }
-
           return queuePageImport(
-            bridgeResponse?.error || "Bridge importChatV3 chua phan hoi, da chuyen sang queue noi bo.",
+            "Da gui nhanh payload vao queue noi bo cua gianhap.id.vn.",
             bridgeDiagnostics
           );
         }
