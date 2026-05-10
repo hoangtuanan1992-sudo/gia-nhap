@@ -202,11 +202,112 @@ button {
 
 .composer {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto auto;
+  grid-template-rows: minmax(0, 1fr) auto auto auto;
   gap: 10px;
   min-height: 0;
   padding: 14px;
   background: #f8f7f1;
+}
+
+.gift-prompt {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #b8d8d1;
+  border-radius: 8px;
+  background: #fffefa;
+  box-shadow: 0 8px 22px rgba(21, 39, 35, 0.08);
+}
+
+.gift-prompt[hidden] {
+  display: none;
+}
+
+.gift-prompt-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.gift-prompt .eyebrow {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.gift-prompt h2 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.gift-prompt p {
+  margin: 0;
+  color: #3f4c48;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.gift-prompt strong {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  border-radius: 7px;
+  color: var(--teal-deep);
+  background: #dff6f1;
+  font-weight: 800;
+}
+
+.gift-prompt label {
+  display: grid;
+  gap: 6px;
+  color: #53615d;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.gift-prompt input {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid #cfd8d3;
+  border-radius: 8px;
+  color: var(--ink);
+  background: #fffdf8;
+  outline: none;
+}
+
+.gift-prompt input:focus {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.13);
+}
+
+.gift-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.gift-primary,
+.gift-secondary {
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.gift-primary {
+  color: #fffdf8;
+  background: var(--teal);
+}
+
+.gift-secondary {
+  border: 1px solid #b8d8d1;
+  color: var(--teal-deep);
+  background: #f0fbf8;
 }
 
 .debug-output {

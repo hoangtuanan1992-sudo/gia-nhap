@@ -63,6 +63,24 @@
 
       <section class="composer">
         <textarea id="chatText" placeholder="Bam tung doan chat tren Zalo Web, noi dung se tu nhay vao day..."></textarea>
+        <form class="gift-prompt" id="giftPrompt" hidden>
+          <div class="gift-prompt-copy">
+            <p class="eyebrow">Ma qua tang moi</p>
+            <h2>Can khai bao truoc khi nhap</h2>
+            <p>
+              NCC <span id="giftSupplierName"></span> chua khai bao ma
+              <strong id="giftCode"></strong>.
+            </p>
+          </div>
+          <label>
+            <span>Gia tri qua tang</span>
+            <input id="giftValue" type="text" inputmode="numeric" placeholder="Vi du: 50000 hoac 50.000" />
+          </label>
+          <div class="gift-actions">
+            <button class="gift-secondary" id="giftSkipButton" type="button">Bo Qua</button>
+            <button class="gift-primary" type="submit">Nhap</button>
+          </div>
+        </form>
         <div class="composer-actions">
           <p id="statusText">Dang san sang chon tin nhan tren Zalo Web.</p>
           <button class="send-button" id="sendButton" type="button" disabled>

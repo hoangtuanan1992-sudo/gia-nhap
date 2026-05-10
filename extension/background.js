@@ -492,58 +492,91 @@ async function executeGianhapDomImport(tab, payload) {
           return { ok: false, error: "Chua co noi dung chat de gui." };
         }
 
+        const bridgeDiagnostics = {};
         const eventBridgeState = await requestPageEventBridge("getState", {}, 2500);
         const bridgeState = eventBridgeState?.ok
           ? eventBridgeState
           : await requestPageBridge("getState", {}, 2500);
-        if (!bridgeState?.ok) {
-          return {
-            ok: false,
-            error: "Tab gianhap.id.vn chua co bridge moi. Hay deploy ban web moi roi refresh tab gianhap.id.vn.",
-            diagnostics: {
-              eventBridge: eventBridgeState,
-              postMessageBridge: bridgeState
-            }
-          };
-        }
+        bridgeDiagnostics.state = {
+          eventBridge: eventBridgeState,
+          postMessageBridge: bridgeState
+        };
 
-        if (!bridgeState.supportsImportV3) {
-          return {
-            ok: false,
-            error: "gianhap.id.vn dang chay bridge cu, chua ho tro importChatV3. Hay deploy ban web moi roi refresh tab.",
-            diagnostics: {
-              bridgeVersion: bridgeState.bridgeVersion || 1,
-              supportsDetachedImport: Boolean(bridgeState.supportsDetachedImport),
-              supportsImportV3: Boolean(bridgeState.supportsImportV3),
-              activeSupplierName: bridgeState.activeSupplierName || "",
-              supplierCount: Array.isArray(bridgeState.suppliers) ? bridgeState.suppliers.length : 0
-            }
+        if (bridgeState?.ok && bridgeState.supportsImportV3) {
+          const eventGiftCheck = await requestPageEventBridge("checkGiftCode", payload, 5000);
+          const giftCheck = eventGiftCheck?.ok || eventGiftCheck?.needsGiftCode
+            ? eventGiftCheck
+            : await requestPageBridge("checkGiftCode", payload, 5000);
+          bridgeDiagnostics.giftCheck = {
+            eventBridge: eventGiftCheck,
+            postMessageBridge: giftCheck
           };
-        }
 
-        const eventBridgeResponse = await requestPageEventBridge("importChatV3", payload, 8000);
-        const bridgeResponse = eventBridgeResponse?.ok
-          ? eventBridgeResponse
-          : await requestPageBridge("importChatV3", payload, 5000);
-        return bridgeResponse?.ok
-          ? {
+          if (giftCheck?.needsGiftCode) {
+            return {
+              ok: false,
+              needsGiftCode: true,
+              giftCode: giftCheck.giftCode || "",
+              supplierId: giftCheck.supplierId || payload.supplierId || "",
+              supplierName: giftCheck.supplierName || payload.supplierName || "",
+              diagnostics: bridgeDiagnostics
+            };
+          }
+
+          if (!giftCheck?.ok) {
+            return {
+              ok: false,
+              error: giftCheck?.error || "Chua kiem tra duoc ma qua tang tren gianhap.id.vn. Hay deploy ban web moi roi refresh tab.",
+              diagnostics: bridgeDiagnostics
+            };
+          }
+
+          const eventBridgeResponse = await requestPageEventBridge("importChatV3", payload, 8000);
+          const bridgeResponse = eventBridgeResponse?.ok
+            ? eventBridgeResponse
+            : await requestPageBridge("importChatV3", payload, 5000);
+          bridgeDiagnostics.import = {
+            eventBridge: eventBridgeResponse,
+            postMessageBridge: bridgeResponse
+          };
+
+          if (bridgeResponse?.ok) {
+            return {
               ok: true,
               usedBridge: true,
               supplierId: bridgeResponse.supplierId || payload.supplierId || "",
-              supplierName: bridgeResponse.supplierName || payload.supplierName || ""
-            }
-          : {
-              ok: false,
-              error: bridgeResponse?.error || "Bridge gianhap.id.vn khong nhan duoc du lieu.",
-              diagnostics: {
-                eventBridge: eventBridgeResponse,
-                postMessageBridge: bridgeResponse
-              }
+              supplierName: bridgeResponse.supplierName || payload.supplierName || "",
+              diagnostics: bridgeDiagnostics
             };
+          }
+
+          if (bridgeResponse?.needsGiftCode) {
+            return {
+              ok: false,
+              needsGiftCode: true,
+              giftCode: bridgeResponse.giftCode || "",
+              supplierId: bridgeResponse.supplierId || payload.supplierId || "",
+              supplierName: bridgeResponse.supplierName || payload.supplierName || "",
+              diagnostics: bridgeDiagnostics
+            };
+          }
+
+          if (payload.giftResolution?.code) {
+            return {
+              ok: false,
+              error: bridgeResponse?.error || "Bridge chua xac nhan duoc lan gui sau khi khai bao ma qua tang.",
+              diagnostics: bridgeDiagnostics
+            };
+          }
+        }
 
         const composer = document.querySelector(".chat-composer");
         if (!composer) {
-          return { ok: false, error: "Khong tim thay khung chat tren gianhap.id.vn." };
+          return {
+            ok: false,
+            error: "Khong tim thay khung chat tren gianhap.id.vn.",
+            diagnostics: bridgeDiagnostics
+          };
         }
 
         const supplierKey = normalizeSearch(payload.supplierName || "");
@@ -555,6 +588,17 @@ async function executeGianhapDomImport(tab, payload) {
           uniqueChips.find((chip) => normalizeSearch(chip.textContent) === supplierKey) ||
           uniqueChips.find((chip) => supplierKey && normalizeSearch(chip.textContent).includes(supplierKey));
 
+        if (!supplierChip) {
+          return {
+            ok: false,
+            error: `Khong tim thay NCC "${payload.supplierName || payload.supplierId}" tren gianhap.id.vn.`,
+            diagnostics: {
+              ...bridgeDiagnostics,
+              availableSuppliers: uniqueChips.map((chip) => chip.textContent.trim()).slice(0, 30)
+            }
+          };
+        }
+
         if (supplierChip) {
           supplierChip.click();
           await waitForFrame();
@@ -563,7 +607,11 @@ async function executeGianhapDomImport(tab, payload) {
 
         const textarea = composer.querySelector("textarea");
         if (!textarea) {
-          return { ok: false, error: "Khong tim thay o nhap chat tren gianhap.id.vn." };
+          return {
+            ok: false,
+            error: "Khong tim thay o nhap chat tren gianhap.id.vn.",
+            diagnostics: bridgeDiagnostics
+          };
         }
 
         textarea.focus();
@@ -578,7 +626,11 @@ async function executeGianhapDomImport(tab, payload) {
 
         const sendButton = composer.querySelector(".send-button");
         if (!sendButton) {
-          return { ok: false, error: "Khong tim thay nut Gui tren gianhap.id.vn." };
+          return {
+            ok: false,
+            error: "Khong tim thay nut Gui tren gianhap.id.vn.",
+            diagnostics: bridgeDiagnostics
+          };
         }
 
         await waitUntil(() => !sendButton.disabled, 3000, 80);
@@ -592,15 +644,23 @@ async function executeGianhapDomImport(tab, payload) {
         if (sendButton.disabled) {
           return {
             ok: false,
-            error: "Da dien du lieu nhung nut Gui cua gianhap.id.vn van bi khoa. Hay chon NCC trong web chinh roi thu lai."
+            error: "Da dien du lieu nhung nut Gui cua gianhap.id.vn van bi khoa.",
+            diagnostics: {
+              ...bridgeDiagnostics,
+              selectedSupplier: supplierChip.textContent.trim(),
+              textareaLength: textarea.value.trim().length,
+              sendButtonDisabled: Boolean(sendButton.disabled)
+            }
           };
         }
 
         sendButton.click();
         return {
           ok: true,
+          usedDomFallback: true,
           supplierId,
-          supplierName: supplierChip?.textContent?.trim() || payload.supplierName || ""
+          supplierName: supplierChip?.textContent?.trim() || payload.supplierName || "",
+          diagnostics: bridgeDiagnostics
         };
       }
     });

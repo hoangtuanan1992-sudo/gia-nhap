@@ -11,7 +11,12 @@ const elements = {
   sendButton: document.getElementById("sendButton"),
   chatText: document.getElementById("chatText"),
   supplierSearch: document.getElementById("supplierSearch"),
-  supplierList: document.getElementById("supplierList")
+  supplierList: document.getElementById("supplierList"),
+  giftPrompt: document.getElementById("giftPrompt"),
+  giftSupplierName: document.getElementById("giftSupplierName"),
+  giftCode: document.getElementById("giftCode"),
+  giftValue: document.getElementById("giftValue"),
+  giftSkipButton: document.getElementById("giftSkipButton")
 };
 
 const state = {
@@ -19,7 +24,8 @@ const state = {
   selectedSupplierId: "",
   selectedSupplierName: "",
   selectedSegments: [],
-  isSending: false
+  isSending: false,
+  pendingGift: null
 };
 
 function sendRuntimeMessage(message, timeoutMs = IMPORT_RESPONSE_TIMEOUT, timeoutFallback = null) {
@@ -65,6 +71,28 @@ function setStatus(message) {
 
 function updateSendButtonState() {
   elements.sendButton.disabled = state.isSending || !state.selectedSupplierId;
+}
+
+function renderGiftPrompt() {
+  if (!elements.giftPrompt) {
+    return;
+  }
+
+  if (!state.pendingGift) {
+    elements.giftPrompt.hidden = true;
+    elements.giftValue.value = "";
+    return;
+  }
+
+  elements.giftSupplierName.textContent = state.pendingGift.supplierName || state.selectedSupplierName || "";
+  elements.giftCode.textContent = state.pendingGift.giftCode || "";
+  elements.giftPrompt.hidden = false;
+  elements.giftValue.focus();
+}
+
+function clearPendingGift() {
+  state.pendingGift = null;
+  renderGiftPrompt();
 }
 
 function setDebugOutput(value) {
@@ -181,6 +209,7 @@ function renderSuppliers() {
     button.addEventListener("click", () => {
       state.selectedSupplierId = supplier.id;
       state.selectedSupplierName = supplier.name;
+      clearPendingGift();
       elements.chatText.placeholder = `Bam tung doan chat tren Zalo Web de gui cho ${supplier.name}...`;
       renderSuppliers();
       updateSendButtonState();
@@ -257,7 +286,7 @@ async function diagnoseGianhap() {
   });
 }
 
-async function sendToGianhap() {
+async function sendToGianhap(options = {}) {
   const text = elements.chatText.value.trim();
   if (!text) {
     setStatus("Chua co noi dung chat de gui.");
@@ -269,6 +298,12 @@ async function sendToGianhap() {
     return;
   }
 
+  if (state.pendingGift && !options.giftResolution) {
+    setStatus("Nhap gia tri qua tang hoac bam Bo Qua trong extension.");
+    renderGiftPrompt();
+    return;
+  }
+
   state.isSending = true;
   updateSendButtonState();
   setStatus("Dang day du lieu vao gianhap.id.vn...");
@@ -277,11 +312,24 @@ async function sendToGianhap() {
     type: "SIDE_PANEL_IMPORT_TO_GIANHAP",
     text,
     supplierId: state.selectedSupplierId,
-    supplierName: state.selectedSupplierName
+    supplierName: state.selectedSupplierName,
+    giftResolution: options.giftResolution || null
   }, IMPORT_RESPONSE_TIMEOUT);
 
   state.isSending = false;
   updateSendButtonState();
+
+  if (response?.needsGiftCode) {
+    state.pendingGift = {
+      giftCode: response.giftCode || "",
+      supplierId: response.supplierId || state.selectedSupplierId,
+      supplierName: response.supplierName || state.selectedSupplierName
+    };
+    renderGiftPrompt();
+    setStatus(`Can khai bao ma qua tang ${state.pendingGift.giftCode} truoc khi gui.`);
+    setDebugOutput("");
+    return;
+  }
 
   if (!response?.ok) {
     setStatus(response?.error || "Khong gui duoc du lieu.");
@@ -301,6 +349,7 @@ async function sendToGianhap() {
   chrome.storage.local.remove(DRAFT_KEY);
   elements.chatText.value = "";
   state.selectedSegments = [];
+  clearPendingGift();
   setStatus(
     response.usedBridge
       ? `Da gui qua bridge gianhap.id.vn cho ${response.supplierName || state.selectedSupplierName}.`
@@ -311,9 +360,44 @@ async function sendToGianhap() {
 function clearDraft() {
   elements.chatText.value = "";
   state.selectedSegments = [];
+  clearPendingGift();
   chrome.storage.local.remove(DRAFT_KEY);
   setStatus("Da xoa noi dung dang nhap.");
   updateSendButtonState();
+}
+
+async function submitGiftValue(event) {
+  event.preventDefault();
+  if (!state.pendingGift) {
+    return;
+  }
+
+  const value = elements.giftValue.value.trim();
+  if (!value) {
+    setStatus("Nhap gia tri cho ma qua tang moi.");
+    elements.giftValue.focus();
+    return;
+  }
+
+  await sendToGianhap({
+    giftResolution: {
+      code: state.pendingGift.giftCode,
+      value
+    }
+  });
+}
+
+async function skipGiftValue() {
+  if (!state.pendingGift) {
+    return;
+  }
+
+  await sendToGianhap({
+    giftResolution: {
+      code: state.pendingGift.giftCode,
+      skip: true
+    }
+  });
 }
 
 elements.refreshButton.addEventListener("click", () => {
@@ -323,9 +407,12 @@ elements.refreshButton.addEventListener("click", () => {
 elements.diagnoseButton.addEventListener("click", diagnoseGianhap);
 elements.clearButton.addEventListener("click", clearDraft);
 elements.sendButton.addEventListener("click", sendToGianhap);
+elements.giftPrompt.addEventListener("submit", submitGiftValue);
+elements.giftSkipButton.addEventListener("click", skipGiftValue);
 elements.supplierSearch.addEventListener("input", renderSuppliers);
 elements.chatText.addEventListener("input", () => {
   syncSegmentsFromText();
+  clearPendingGift();
   saveDraft();
 });
 
@@ -336,6 +423,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 
   if (changes[DRAFT_KEY]?.newValue) {
     applyDraft(changes[DRAFT_KEY].newValue);
+    clearPendingGift();
     renderSuppliers();
     const count = state.selectedSegments.length;
     if (count) {

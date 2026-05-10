@@ -2551,6 +2551,47 @@ function resolveSalePrice(row) {
       window.dispatchEvent(new CustomEvent("gianhap-extension-response", { detail: response }));
     }
 
+    function resolveExtensionSupplier(data) {
+      const requestedSupplierId = String(data.supplierId || "");
+      const requestedSupplierName = normalizeSearch(data.supplierName || "");
+      const supplier =
+        suppliers.find((item) => item.id === requestedSupplierId) ||
+        suppliers.find((item) => normalizeSearch(item.name) === requestedSupplierName);
+
+      if (!supplier) {
+        throw new Error("Chua chon nha cung cap.");
+      }
+
+      return supplier;
+    }
+
+    function prepareExtensionSubmission(data, supplier, effectiveSettings) {
+      const message = String(data.text || "").trim();
+      const giftResolution = data.giftResolution || {};
+      const resolutionCode = String(giftResolution.code || "").trim();
+      const resolutionValue = String(giftResolution.value || "").trim();
+      const ignoredCodes = resolutionCode && giftResolution.skip ? [resolutionCode] : [];
+      let nextSupplier = supplier;
+      let nextSettings = effectiveSettings;
+
+      if (resolutionCode && resolutionValue) {
+        nextSupplier = supplierWithGiftCode(supplier, resolutionCode, resolutionValue);
+        const baseSuppliers = effectiveSettings.suppliers?.length ? effectiveSettings.suppliers : suppliers;
+        nextSettings = {
+          ...effectiveSettings,
+          suppliers: baseSuppliers.map((item) => (item.id === nextSupplier.id ? nextSupplier : item)),
+          activeSupplierId: nextSupplier.id
+        };
+      }
+
+      return {
+        message,
+        supplier: nextSupplier,
+        settings: nextSettings,
+        unknownGiftCode: findUnknownGiftCode(message, nextSupplier, ignoredCodes)
+      };
+    }
+
     async function handleExtensionRequest(event) {
       if (event.source !== window) {
         return;
@@ -2591,15 +2632,7 @@ function resolveSalePrice(row) {
             throw new Error("Chua co noi dung chat de gui.");
           }
 
-          const requestedSupplierId = String(data.supplierId || "");
-          const requestedSupplierName = normalizeSearch(data.supplierName || "");
-          const supplier =
-            suppliers.find((item) => item.id === requestedSupplierId) ||
-            suppliers.find((item) => normalizeSearch(item.name) === requestedSupplierName);
-
-          if (!supplier) {
-            throw new Error("Chua chon nha cung cap.");
-          }
+          const supplier = resolveExtensionSupplier(data);
 
           const effectiveSettings = {
             ...settings,
@@ -2627,15 +2660,7 @@ function resolveSalePrice(row) {
             throw new Error("Chua co noi dung chat de gui.");
           }
 
-          const requestedSupplierId = String(data.supplierId || "");
-          const requestedSupplierName = normalizeSearch(data.supplierName || "");
-          const supplier =
-            suppliers.find((item) => item.id === requestedSupplierId) ||
-            suppliers.find((item) => normalizeSearch(item.name) === requestedSupplierName);
-
-          if (!supplier) {
-            throw new Error("Chua chon nha cung cap.");
-          }
+          const supplier = resolveExtensionSupplier(data);
 
           const effectiveSettings = {
             ...settings,
@@ -2661,6 +2686,33 @@ function resolveSalePrice(row) {
           return;
         }
 
+        if (data.action === "checkGiftCode") {
+          if (isCheckingAuth || !auth?.token) {
+            throw new Error("Tab gianhap.id.vn chua dang nhap xong.");
+          }
+
+          const message = String(data.text || "").trim();
+          if (!message) {
+            throw new Error("Chua co noi dung chat de gui.");
+          }
+
+          const supplier = resolveExtensionSupplier(data);
+          const effectiveSettings = {
+            ...settings,
+            activeSupplierId: supplier.id
+          };
+          const prepared = prepareExtensionSubmission(data, supplier, effectiveSettings);
+
+          postExtensionResponse(id, {
+            ok: !prepared.unknownGiftCode,
+            needsGiftCode: Boolean(prepared.unknownGiftCode),
+            giftCode: prepared.unknownGiftCode,
+            supplierId: prepared.supplier.id,
+            supplierName: prepared.supplier.name
+          });
+          return;
+        }
+
         if (data.action === "importChatV3") {
           if (isCheckingAuth || !auth?.token) {
             throw new Error("Tab gianhap.id.vn chua dang nhap xong.");
@@ -2671,24 +2723,28 @@ function resolveSalePrice(row) {
             throw new Error("Chua co noi dung chat de gui.");
           }
 
-          const requestedSupplierId = String(data.supplierId || "");
-          const requestedSupplierName = normalizeSearch(data.supplierName || "");
-          const supplier =
-            suppliers.find((item) => item.id === requestedSupplierId) ||
-            suppliers.find((item) => normalizeSearch(item.name) === requestedSupplierName);
-
-          if (!supplier) {
-            throw new Error("Chua chon nha cung cap.");
-          }
+          const supplier = resolveExtensionSupplier(data);
 
           const effectiveSettings = {
             ...settings,
             activeSupplierId: supplier.id
           };
+          const prepared = prepareExtensionSubmission(data, supplier, effectiveSettings);
+
+          if (prepared.unknownGiftCode) {
+            postExtensionResponse(id, {
+              ok: false,
+              needsGiftCode: true,
+              giftCode: prepared.unknownGiftCode,
+              supplierId: prepared.supplier.id,
+              supplierName: prepared.supplier.name
+            });
+            return;
+          }
 
           window.__gianhapLastExtensionImport = {
-            supplierId: supplier.id,
-            supplierName: supplier.name,
+            supplierId: prepared.supplier.id,
+            supplierName: prepared.supplier.name,
             textLength: message.length,
             receivedAt: new Date().toISOString()
           };
@@ -2697,16 +2753,16 @@ function resolveSalePrice(row) {
             ok: true,
             queued: true,
             bridgeVersion: 3,
-            supplierId: supplier.id,
-            supplierName: supplier.name,
+            supplierId: prepared.supplier.id,
+            supplierName: prepared.supplier.name,
             textLength: message.length
           });
 
           window.setTimeout(() => {
             setShowSupplierRequiredError(false);
-            setSettings(effectiveSettings);
+            setSettings(prepared.settings);
             setInput(message);
-            processSubmissionWithGiftCheck(message, effectiveSettings, supplier, [], []).catch((error) => {
+            submitPreparedMessage(message, prepared.settings, prepared.supplier, []).catch((error) => {
               addMessage("assistant", error.message || "Khong nhan duoc du lieu tu extension.");
               setStatus("Can kiem tra du lieu tu extension.");
             });
