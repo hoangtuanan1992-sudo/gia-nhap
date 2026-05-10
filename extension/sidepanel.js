@@ -63,6 +63,10 @@ function setStatus(message) {
   elements.statusText.textContent = message;
 }
 
+function updateSendButtonState() {
+  elements.sendButton.disabled = state.isSending || !state.selectedSupplierId;
+}
+
 function setDebugOutput(value) {
   if (!elements.debugOutput) {
     return;
@@ -121,6 +125,33 @@ function applyDraft(draft = {}) {
   state.selectedSupplierName = draft.supplierName || state.selectedSupplierName;
 }
 
+function syncSelectedSupplierWithList() {
+  if (!state.suppliers.length) {
+    state.selectedSupplierId = "";
+    state.selectedSupplierName = "";
+    updateSendButtonState();
+    return null;
+  }
+
+  const savedById = state.suppliers.find((supplier) => supplier.id === state.selectedSupplierId);
+  const savedByName = state.suppliers.find((supplier) => supplier.name === state.selectedSupplierName);
+  const nextSupplier = savedById || savedByName || null;
+
+  if (!nextSupplier) {
+    state.selectedSupplierId = "";
+    state.selectedSupplierName = "";
+    elements.chatText.placeholder = "Chon NCC truoc khi gui du lieu...";
+    updateSendButtonState();
+    return null;
+  }
+
+  state.selectedSupplierId = nextSupplier.id;
+  state.selectedSupplierName = nextSupplier.name;
+  elements.chatText.placeholder = `Bam tung doan chat tren Zalo Web de gui cho ${nextSupplier.name}...`;
+  updateSendButtonState();
+  return nextSupplier;
+}
+
 async function loadDraft() {
   const stored = await chrome.storage.local.get(DRAFT_KEY);
   if (stored?.[DRAFT_KEY]) {
@@ -152,6 +183,7 @@ function renderSuppliers() {
       state.selectedSupplierName = supplier.name;
       elements.chatText.placeholder = `Bam tung doan chat tren Zalo Web de gui cho ${supplier.name}...`;
       renderSuppliers();
+      updateSendButtonState();
       saveDraft();
     });
     elements.supplierList.append(button);
@@ -169,22 +201,18 @@ async function refreshGianhapState() {
   }
 
   state.suppliers = Array.isArray(response.suppliers) ? response.suppliers : [];
-  const activeSupplier = state.suppliers.find((supplier) => supplier.id === response.activeSupplierId);
-  const savedSupplier = state.suppliers.find((supplier) => supplier.id === state.selectedSupplierId);
-  const byName = state.suppliers.find((supplier) => supplier.name === state.selectedSupplierName);
-  const nextSupplier = savedSupplier || byName || activeSupplier || state.suppliers[0] || null;
-
-  state.selectedSupplierId = nextSupplier?.id || "";
-  state.selectedSupplierName = nextSupplier?.name || "";
+  syncSelectedSupplierWithList();
   renderSuppliers();
   saveDraft();
 
   if (!response.loggedIn) {
     setStatus("Tab gianhap.id.vn chua dang nhap xong.");
+    updateSendButtonState();
     return;
   }
 
   setStatus("Bam truc tiep tung tin nhan tren Zalo Web de them vao o chat.");
+  updateSendButtonState();
 }
 
 async function startZaloPick() {
@@ -224,7 +252,7 @@ async function sendToGianhap() {
   }
 
   state.isSending = true;
-  elements.sendButton.disabled = true;
+  updateSendButtonState();
   setStatus("Dang day du lieu vao gianhap.id.vn...");
 
   const response = await sendRuntimeMessage({
@@ -235,7 +263,7 @@ async function sendToGianhap() {
   }, IMPORT_RESPONSE_TIMEOUT);
 
   state.isSending = false;
-  elements.sendButton.disabled = false;
+  updateSendButtonState();
 
   if (!response?.ok) {
     setStatus(response?.error || "Khong gui duoc du lieu.");
@@ -257,6 +285,7 @@ function clearDraft() {
   state.selectedSegments = [];
   chrome.storage.local.remove(DRAFT_KEY);
   setStatus("Da xoa noi dung dang nhap.");
+  updateSendButtonState();
 }
 
 elements.refreshButton.addEventListener("click", () => {
@@ -310,4 +339,5 @@ chrome.runtime.onMessage.addListener((message) => {
 loadDraft().then(async () => {
   await refreshGianhapState();
   await startZaloPick();
+  updateSendButtonState();
 });
