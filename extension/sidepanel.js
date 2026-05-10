@@ -231,12 +231,30 @@ async function diagnoseGianhap() {
   const response = await sendRuntimeMessage({ type: "SIDE_PANEL_DIAGNOSE_GIANHAP" }, 12000);
   if (!response?.ok) {
     setStatus(response?.error || "Khong kiem tra duoc gianhap.id.vn.");
-    setDebugOutput(response || {});
+    setDebugOutput({
+      panel: {
+        selectedSupplierId: state.selectedSupplierId,
+        selectedSupplierName: state.selectedSupplierName,
+        chatTextLength: elements.chatText.value.trim().length,
+        selectedSegmentCount: state.selectedSegments.length,
+        sendButtonDisabled: elements.sendButton.disabled
+      },
+      response: response || {}
+    });
     return;
   }
 
   setStatus("Da kiem tra xong. Gui minh noi dung debug ben duoi neu van loi.");
-  setDebugOutput(response.diagnostics || response);
+  setDebugOutput({
+    panel: {
+      selectedSupplierId: state.selectedSupplierId,
+      selectedSupplierName: state.selectedSupplierName,
+      chatTextLength: elements.chatText.value.trim().length,
+      selectedSegmentCount: state.selectedSegments.length,
+      sendButtonDisabled: elements.sendButton.disabled
+    },
+    gianhap: response.diagnostics || response
+  });
 }
 
 async function sendToGianhap() {
