@@ -285,6 +285,7 @@ async function diagnoseGianhap() {
           href: location.href,
           title: document.title,
           readyState: document.readyState,
+          lastExtensionImport: window.__gianhapLastExtensionImport || null,
           hasLoginCard: Boolean(document.querySelector(".login-card")),
           hasComposer: Boolean(composer),
           hasTextarea: Boolean(textarea),
@@ -422,19 +423,21 @@ async function executeGianhapDomImport(tab, payload) {
           };
         }
 
-        if (!bridgeState.supportsDetachedImport) {
+        if (!bridgeState.supportsImportV3) {
           return {
             ok: false,
-            error: "gianhap.id.vn dang chay bridge cu, chua ho tro nhan du lieu tu side panel. Hay deploy ban web moi roi refresh tab.",
+            error: "gianhap.id.vn dang chay bridge cu, chua ho tro importChatV3. Hay deploy ban web moi roi refresh tab.",
             diagnostics: {
               bridgeVersion: bridgeState.bridgeVersion || 1,
+              supportsDetachedImport: Boolean(bridgeState.supportsDetachedImport),
+              supportsImportV3: Boolean(bridgeState.supportsImportV3),
               activeSupplierName: bridgeState.activeSupplierName || "",
               supplierCount: Array.isArray(bridgeState.suppliers) ? bridgeState.suppliers.length : 0
             }
           };
         }
 
-        const bridgeResponse = await requestPageBridge("importChatDetached", payload, 5000);
+        const bridgeResponse = await requestPageBridge("importChatV3", payload, 5000);
         return bridgeResponse?.ok
           ? {
               ok: true,

@@ -2567,8 +2567,9 @@ function resolveSalePrice(row) {
         if (data.action === "getState") {
           postExtensionResponse(id, {
             ok: true,
-            bridgeVersion: 2,
+            bridgeVersion: 3,
             supportsDetachedImport: true,
+            supportsImportV3: true,
             loggedIn: Boolean(!isCheckingAuth && auth?.token),
             suppliers: suppliers.map((supplier) => ({
               id: supplier.id,
@@ -2631,8 +2632,7 @@ function resolveSalePrice(row) {
           const requestedSupplierName = normalizeSearch(data.supplierName || "");
           const supplier =
             suppliers.find((item) => item.id === requestedSupplierId) ||
-            suppliers.find((item) => normalizeSearch(item.name) === requestedSupplierName) ||
-            activeSupplier;
+            suppliers.find((item) => normalizeSearch(item.name) === requestedSupplierName);
 
           if (!supplier) {
             throw new Error("Chua chon nha cung cap.");
@@ -2658,7 +2658,60 @@ function resolveSalePrice(row) {
             .catch((error) => {
               addMessage("assistant", error.message || "Khong nhan duoc du lieu tu extension.");
               setStatus("Can kiem tra du lieu tu extension.");
+          });
+          return;
+        }
+
+        if (data.action === "importChatV3") {
+          if (isCheckingAuth || !auth?.token) {
+            throw new Error("Tab gianhap.id.vn chua dang nhap xong.");
+          }
+
+          const message = String(data.text || "").trim();
+          if (!message) {
+            throw new Error("Chua co noi dung chat de gui.");
+          }
+
+          const requestedSupplierId = String(data.supplierId || "");
+          const requestedSupplierName = normalizeSearch(data.supplierName || "");
+          const supplier =
+            suppliers.find((item) => item.id === requestedSupplierId) ||
+            suppliers.find((item) => normalizeSearch(item.name) === requestedSupplierName);
+
+          if (!supplier) {
+            throw new Error("Chua chon nha cung cap.");
+          }
+
+          const effectiveSettings = {
+            ...settings,
+            activeSupplierId: supplier.id
+          };
+
+          window.__gianhapLastExtensionImport = {
+            supplierId: supplier.id,
+            supplierName: supplier.name,
+            textLength: message.length,
+            receivedAt: new Date().toISOString()
+          };
+
+          postExtensionResponse(id, {
+            ok: true,
+            queued: true,
+            bridgeVersion: 3,
+            supplierId: supplier.id,
+            supplierName: supplier.name,
+            textLength: message.length
+          });
+
+          window.setTimeout(() => {
+            setShowSupplierRequiredError(false);
+            setSettings(effectiveSettings);
+            setInput(message);
+            processSubmissionWithGiftCheck(message, effectiveSettings, supplier, [], []).catch((error) => {
+              addMessage("assistant", error.message || "Khong nhan duoc du lieu tu extension.");
+              setStatus("Can kiem tra du lieu tu extension.");
             });
+          }, 0);
           return;
         }
 
