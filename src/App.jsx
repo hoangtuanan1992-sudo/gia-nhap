@@ -2541,14 +2541,14 @@ function resolveSalePrice(row) {
     const responseType = "__GIANHAP_EXTENSION_RESPONSE__";
 
     function postExtensionResponse(id, payload) {
-      window.postMessage(
-        {
-          type: responseType,
-          id,
-          ...payload
-        },
-        window.location.origin
-      );
+      const response = {
+        type: responseType,
+        id,
+        ...payload
+      };
+
+      window.postMessage(response, window.location.origin);
+      window.dispatchEvent(new CustomEvent("gianhap-extension-response", { detail: response }));
     }
 
     async function handleExtensionRequest(event) {
@@ -2595,8 +2595,7 @@ function resolveSalePrice(row) {
           const requestedSupplierName = normalizeSearch(data.supplierName || "");
           const supplier =
             suppliers.find((item) => item.id === requestedSupplierId) ||
-            suppliers.find((item) => normalizeSearch(item.name) === requestedSupplierName) ||
-            activeSupplier;
+            suppliers.find((item) => normalizeSearch(item.name) === requestedSupplierName);
 
           if (!supplier) {
             throw new Error("Chua chon nha cung cap.");
@@ -2724,11 +2723,25 @@ function resolveSalePrice(row) {
       }
     }
 
+    function handleExtensionCommand(event) {
+      const detail = event.detail || {};
+      if (detail.type !== requestType) {
+        return;
+      }
+
+      handleExtensionRequest({
+        source: window,
+        data: detail
+      });
+    }
+
     window.addEventListener("message", handleExtensionRequest);
+    window.addEventListener("gianhap-extension-command", handleExtensionCommand);
     window.dispatchEvent(new CustomEvent("gianhap-extension-bridge-ready"));
 
     return () => {
       window.removeEventListener("message", handleExtensionRequest);
+      window.removeEventListener("gianhap-extension-command", handleExtensionCommand);
     };
   }, [isCheckingAuth, auth?.token, settings, suppliers, activeSupplier, selectedProvider]);
 

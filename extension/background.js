@@ -226,6 +226,7 @@ async function diagnoseGianhap() {
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
+      world: "MAIN",
       func: async () => {
         function requestBridge(action, payload = {}, timeoutMs = 2500) {
           const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -269,10 +270,48 @@ async function diagnoseGianhap() {
           });
         }
 
+        function requestEventBridge(action, payload = {}, timeoutMs = 2500) {
+          const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+          const requestType = "__GIANHAP_EXTENSION_REQUEST__";
+          const responseType = "__GIANHAP_EXTENSION_RESPONSE__";
+
+          return new Promise((resolve) => {
+            const timeout = setTimeout(() => {
+              window.removeEventListener("gianhap-extension-response", handleResponse);
+              resolve({
+                ok: false,
+                error: "Event bridge khong phan hoi trong thoi gian cho."
+              });
+            }, timeoutMs);
+
+            function handleResponse(event) {
+              const data = event.detail || {};
+              if (data.type !== responseType || data.id !== id) {
+                return;
+              }
+
+              clearTimeout(timeout);
+              window.removeEventListener("gianhap-extension-response", handleResponse);
+              resolve(data);
+            }
+
+            window.addEventListener("gianhap-extension-response", handleResponse);
+            window.dispatchEvent(new CustomEvent("gianhap-extension-command", {
+              detail: {
+                type: requestType,
+                id,
+                action,
+                ...payload
+              }
+            }));
+          });
+        }
+
         const composer = document.querySelector(".chat-composer");
         const textarea = composer?.querySelector("textarea") || null;
         const sendButton = composer?.querySelector(".send-button") || null;
         const bridge = await requestBridge("getState", {}, 2500);
+        const eventBridge = await requestEventBridge("getState", {}, 2500);
         const composerChips = [...(composer?.querySelectorAll(".supplier-chip") || [])].map((chip) => ({
           text: chip.textContent.trim(),
           active: chip.classList.contains("active"),
@@ -298,7 +337,8 @@ async function diagnoseGianhap() {
           composerSuppliers: composerChips,
           allSupplierCount: document.querySelectorAll(".supplier-chip").length,
           allSuppliersPreview: allChips,
-          bridge
+          bridge,
+          eventBridge
         };
       }
     });
@@ -321,6 +361,7 @@ async function executeGianhapDomImport(tab, payload) {
   try {
     const executePromise = chrome.scripting.executeScript({
       target: { tabId: tab.id },
+      world: "MAIN",
       args: [payload],
       func: async (payload) => {
         function requestPageBridge(action, payload = {}, timeoutMs = 2500) {
@@ -362,6 +403,43 @@ async function executeGianhapDomImport(tab, payload) {
               },
               window.location.origin
             );
+          });
+        }
+
+        function requestPageEventBridge(action, payload = {}, timeoutMs = 2500) {
+          const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+          const requestType = "__GIANHAP_EXTENSION_REQUEST__";
+          const responseType = "__GIANHAP_EXTENSION_RESPONSE__";
+
+          return new Promise((resolve) => {
+            const timeout = setTimeout(() => {
+              window.removeEventListener("gianhap-extension-response", handleResponse);
+              resolve({
+                ok: false,
+                error: "Event bridge tren gianhap.id.vn chua phan hoi."
+              });
+            }, timeoutMs);
+
+            function handleResponse(event) {
+              const data = event.detail || {};
+              if (data.type !== responseType || data.id !== id) {
+                return;
+              }
+
+              clearTimeout(timeout);
+              window.removeEventListener("gianhap-extension-response", handleResponse);
+              resolve(data);
+            }
+
+            window.addEventListener("gianhap-extension-response", handleResponse);
+            window.dispatchEvent(new CustomEvent("gianhap-extension-command", {
+              detail: {
+                type: requestType,
+                id,
+                action,
+                ...payload
+              }
+            }));
           });
         }
 
@@ -414,12 +492,18 @@ async function executeGianhapDomImport(tab, payload) {
           return { ok: false, error: "Chua co noi dung chat de gui." };
         }
 
-        const bridgeState = await requestPageBridge("getState", {}, 2500);
+        const eventBridgeState = await requestPageEventBridge("getState", {}, 2500);
+        const bridgeState = eventBridgeState?.ok
+          ? eventBridgeState
+          : await requestPageBridge("getState", {}, 2500);
         if (!bridgeState?.ok) {
           return {
             ok: false,
             error: "Tab gianhap.id.vn chua co bridge moi. Hay deploy ban web moi roi refresh tab gianhap.id.vn.",
-            diagnostics: bridgeState
+            diagnostics: {
+              eventBridge: eventBridgeState,
+              postMessageBridge: bridgeState
+            }
           };
         }
 
@@ -437,7 +521,10 @@ async function executeGianhapDomImport(tab, payload) {
           };
         }
 
-        const bridgeResponse = await requestPageBridge("importChatV3", payload, 5000);
+        const eventBridgeResponse = await requestPageEventBridge("importChatV3", payload, 8000);
+        const bridgeResponse = eventBridgeResponse?.ok
+          ? eventBridgeResponse
+          : await requestPageBridge("importChatV3", payload, 5000);
         return bridgeResponse?.ok
           ? {
               ok: true,
@@ -448,7 +535,10 @@ async function executeGianhapDomImport(tab, payload) {
           : {
               ok: false,
               error: bridgeResponse?.error || "Bridge gianhap.id.vn khong nhan duoc du lieu.",
-              diagnostics: bridgeResponse
+              diagnostics: {
+                eventBridge: eventBridgeResponse,
+                postMessageBridge: bridgeResponse
+              }
             };
 
         const composer = document.querySelector(".chat-composer");

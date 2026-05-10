@@ -285,6 +285,16 @@ async function sendToGianhap() {
 
   if (!response?.ok) {
     setStatus(response?.error || "Khong gui duoc du lieu.");
+    setDebugOutput({
+      sendError: response || null,
+      panel: {
+        selectedSupplierId: state.selectedSupplierId,
+        selectedSupplierName: state.selectedSupplierName,
+        chatTextLength: text.length,
+        selectedSegmentCount: state.selectedSegments.length,
+        sendButtonDisabled: elements.sendButton.disabled
+      }
+    });
     return;
   }
 
