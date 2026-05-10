@@ -1252,6 +1252,7 @@ function App() {
   const [giftValueDraft, setGiftValueDraft] = useState("");
   const [pendingSubmission, setPendingSubmission] = useState(null);
   const [pendingProductMatch, setPendingProductMatch] = useState(null);
+  const extensionQueuedImportIdRef = useRef("");
   const [settingsSyncReady, setSettingsSyncReady] = useState(false);
   const [collapsedSettingsCards, setCollapsedSettingsCards] = useState({
     api: true,
@@ -2531,6 +2532,117 @@ function resolveSalePrice(row) {
 
     await submitPreparedMessage(message, effectiveSettings, supplier, images);
   }
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    async function processQueuedExtensionImport(payload) {
+      const message = String(payload?.text || "").trim();
+      if (isCheckingAuth || !auth?.token) {
+        throw new Error("Tab gianhap.id.vn chua dang nhap xong.");
+      }
+      if (!message) {
+        throw new Error("Chua co noi dung chat de gui.");
+      }
+
+      const requestedSupplierId = String(payload?.supplierId || "");
+      const requestedSupplierName = normalizeSearch(payload?.supplierName || "");
+      const supplier =
+        suppliers.find((item) => item.id === requestedSupplierId) ||
+        suppliers.find((item) => normalizeSearch(item.name) === requestedSupplierName);
+
+      if (!supplier) {
+        throw new Error("Chua chon nha cung cap.");
+      }
+
+      const giftResolution = payload?.giftResolution || {};
+      const resolutionCode = String(giftResolution.code || "").trim();
+      const resolutionValue = String(giftResolution.value || "").trim();
+      const ignoredCodes = resolutionCode && giftResolution.skip ? [resolutionCode] : [];
+      let nextSupplier = supplier;
+      let nextSettings = {
+        ...settings,
+        activeSupplierId: supplier.id
+      };
+
+      if (resolutionCode && resolutionValue) {
+        nextSupplier = supplierWithGiftCode(supplier, resolutionCode, resolutionValue);
+        const baseSuppliers = nextSettings.suppliers?.length ? nextSettings.suppliers : suppliers;
+        nextSettings = {
+          ...nextSettings,
+          suppliers: baseSuppliers.map((item) => (item.id === nextSupplier.id ? nextSupplier : item)),
+          activeSupplierId: nextSupplier.id
+        };
+      }
+
+      const unknownGiftCode = findUnknownGiftCode(message, nextSupplier, ignoredCodes);
+      if (unknownGiftCode) {
+        window.__gianhapLastExtensionImportResult = {
+          ok: false,
+          needsGiftCode: true,
+          giftCode: unknownGiftCode,
+          supplierId: nextSupplier.id,
+          supplierName: nextSupplier.name,
+          finishedAt: new Date().toISOString()
+        };
+        setStatus(`Can khai bao ma qua tang ${unknownGiftCode} trong extension.`);
+        return;
+      }
+
+      window.__gianhapLastExtensionImport = {
+        supplierId: nextSupplier.id,
+        supplierName: nextSupplier.name,
+        textLength: message.length,
+        receivedAt: new Date().toISOString(),
+        source: "queued-import"
+      };
+
+      setShowSupplierRequiredError(false);
+      setSettings(nextSettings);
+      setInput(message);
+      await submitPreparedMessage(message, nextSettings, nextSupplier, []);
+
+      window.__gianhapLastExtensionImportResult = {
+        ok: true,
+        supplierId: nextSupplier.id,
+        supplierName: nextSupplier.name,
+        textLength: message.length,
+        finishedAt: new Date().toISOString()
+      };
+    }
+
+    const interval = window.setInterval(() => {
+      const payload = window.__gianhapExtensionQueuedImport;
+      if (!payload?.id || payload.id === extensionQueuedImportIdRef.current) {
+        return;
+      }
+
+      extensionQueuedImportIdRef.current = payload.id;
+      window.__gianhapExtensionQueuedImport = null;
+      window.__gianhapLastExtensionImportResult = {
+        ok: false,
+        queued: true,
+        id: payload.id,
+        startedAt: new Date().toISOString()
+      };
+
+      processQueuedExtensionImport(payload).catch((error) => {
+        window.__gianhapLastExtensionImportResult = {
+          ok: false,
+          error: error.message || "Khong nhan duoc du lieu tu extension.",
+          finishedAt: new Date().toISOString()
+        };
+        addMessage("assistant", error.message || "Khong nhan duoc du lieu tu extension.");
+        setStatus("Can kiem tra du lieu tu extension.");
+      });
+    }, 300);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [isCheckingAuth, auth?.token, settings, suppliers]);
 
   useEffect(() => {
     if (typeof window === "undefined") {

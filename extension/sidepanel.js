@@ -120,6 +120,61 @@ function normalizeSearch(value) {
     .trim();
 }
 
+const giftPhrasePatterns = [
+  { code: "KM kem theo", pattern: /\bkm\s*kem\s*theo\b/ },
+  { code: "KM dac biet", pattern: /\bkm\s*dac\s*biet\b/ },
+  { code: "Xuat kich", pattern: /\bxuat\s*kich\b/ },
+  { code: "Tang kem", pattern: /\btang\s*kem\b/ },
+  { code: "KM", pattern: /\bkm\b(?!\s*(?:kem\s*theo|dac\s*biet))/ },
+  { code: "Qua", pattern: /\bqua\b/ },
+  { code: "XK", pattern: /\bxk\b/ },
+  { code: "FT", pattern: /\bft\b/ }
+];
+
+function normalizeGiftCode(value = "") {
+  return normalizeSearch(value).replace(/\s+/g, "").toUpperCase();
+}
+
+function addGiftCandidate(codes, seen, code = "") {
+  const displayCode = String(code || "").trim();
+  const key = normalizeGiftCode(displayCode);
+  if (!displayCode || !key || seen.has(key)) {
+    return;
+  }
+
+  seen.add(key);
+  codes.push(displayCode);
+}
+
+function findGiftCodeInText(text = "") {
+  const codes = [];
+  const seen = new Set();
+  const pricePattern = /(?:^|[\s:])(\d{1,3}(?:[.,]\d{3})+|\d+(?:[.,]\d+)?)(?=\s|$|[+-])/g;
+  const codePattern = /(?:^|[\s,+-])([A-Za-z]{1,8}\d{1,5}[A-Za-z0-9]*)\b/g;
+
+  for (const line of String(text || "").split(/\n+/)) {
+    const firstPrice = [...line.matchAll(pricePattern)][0];
+    if (!firstPrice) {
+      continue;
+    }
+
+    const tail = line.slice(firstPrice.index + firstPrice[0].length);
+    const normalizedTail = normalizeSearch(tail);
+
+    for (const item of giftPhrasePatterns) {
+      if (item.pattern.test(normalizedTail)) {
+        addGiftCandidate(codes, seen, item.code);
+      }
+    }
+
+    for (const match of tail.matchAll(codePattern)) {
+      addGiftCandidate(codes, seen, match[1].toUpperCase());
+    }
+  }
+
+  return codes[0] || "";
+}
+
 function splitSegments(text) {
   return String(text || "")
     .split(/\n\s*---+\s*\n|\n(?=Doan\s+\d+:\n)/i)
@@ -304,6 +359,19 @@ async function sendToGianhap(options = {}) {
     return;
   }
 
+  const localGiftCode = !options.giftResolution ? findGiftCodeInText(text) : "";
+  if (localGiftCode) {
+    state.pendingGift = {
+      giftCode: localGiftCode,
+      supplierId: state.selectedSupplierId,
+      supplierName: state.selectedSupplierName
+    };
+    renderGiftPrompt();
+    setStatus(`Can khai bao ma qua tang ${localGiftCode} truoc khi gui.`);
+    setDebugOutput("");
+    return;
+  }
+
   state.isSending = true;
   updateSendButtonState();
   setStatus("Dang day du lieu vao gianhap.id.vn...");
@@ -351,7 +419,9 @@ async function sendToGianhap(options = {}) {
   state.selectedSegments = [];
   clearPendingGift();
   setStatus(
-    response.usedBridge
+    response.usedQueue
+      ? `Da chuyen vao hang doi gianhap.id.vn cho ${response.supplierName || state.selectedSupplierName}.`
+      : response.usedBridge
       ? `Da gui qua bridge gianhap.id.vn cho ${response.supplierName || state.selectedSupplierName}.`
       : `Da bam Gui tren gianhap.id.vn cho ${response.supplierName || state.selectedSupplierName}.`
   );

@@ -325,6 +325,7 @@ async function diagnoseGianhap() {
           title: document.title,
           readyState: document.readyState,
           lastExtensionImport: window.__gianhapLastExtensionImport || null,
+          lastExtensionImportResult: window.__gianhapLastExtensionImportResult || null,
           hasLoginCard: Boolean(document.querySelector(".login-card")),
           hasComposer: Boolean(composer),
           hasTextarea: Boolean(textarea),
@@ -492,6 +493,34 @@ async function executeGianhapDomImport(tab, payload) {
           return { ok: false, error: "Chua co noi dung chat de gui." };
         }
 
+        function queuePageImport(reason = "", diagnostics = {}) {
+          const queueId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+          window.__gianhapExtensionQueuedImport = {
+            id: queueId,
+            text,
+            supplierId: String(payload.supplierId || ""),
+            supplierName: String(payload.supplierName || ""),
+            giftResolution: payload.giftResolution || null,
+            queuedAt: new Date().toISOString()
+          };
+          window.__gianhapLastExtensionImportResult = {
+            ok: false,
+            queued: true,
+            id: queueId,
+            reason,
+            queuedAt: new Date().toISOString()
+          };
+
+          return {
+            ok: true,
+            queued: true,
+            usedQueue: true,
+            supplierId: String(payload.supplierId || ""),
+            supplierName: String(payload.supplierName || ""),
+            diagnostics
+          };
+        }
+
         const bridgeDiagnostics = {};
         const eventBridgeState = await requestPageEventBridge("getState", {}, 2500);
         const bridgeState = eventBridgeState?.ok
@@ -503,32 +532,27 @@ async function executeGianhapDomImport(tab, payload) {
         };
 
         if (bridgeState?.ok && bridgeState.supportsImportV3) {
-          const eventGiftCheck = await requestPageEventBridge("checkGiftCode", payload, 5000);
-          const giftCheck = eventGiftCheck?.ok || eventGiftCheck?.needsGiftCode
-            ? eventGiftCheck
-            : await requestPageBridge("checkGiftCode", payload, 5000);
-          bridgeDiagnostics.giftCheck = {
-            eventBridge: eventGiftCheck,
-            postMessageBridge: giftCheck
-          };
-
-          if (giftCheck?.needsGiftCode) {
-            return {
-              ok: false,
-              needsGiftCode: true,
-              giftCode: giftCheck.giftCode || "",
-              supplierId: giftCheck.supplierId || payload.supplierId || "",
-              supplierName: giftCheck.supplierName || payload.supplierName || "",
-              diagnostics: bridgeDiagnostics
+          const hasGiftResolution = Boolean(payload.giftResolution?.code);
+          if (!hasGiftResolution) {
+            const eventGiftCheck = await requestPageEventBridge("checkGiftCode", payload, 5000);
+            const giftCheck = eventGiftCheck?.ok || eventGiftCheck?.needsGiftCode
+              ? eventGiftCheck
+              : await requestPageBridge("checkGiftCode", payload, 5000);
+            bridgeDiagnostics.giftCheck = {
+              eventBridge: eventGiftCheck,
+              postMessageBridge: giftCheck
             };
-          }
 
-          if (!giftCheck?.ok) {
-            return {
-              ok: false,
-              error: giftCheck?.error || "Chua kiem tra duoc ma qua tang tren gianhap.id.vn. Hay deploy ban web moi roi refresh tab.",
-              diagnostics: bridgeDiagnostics
-            };
+            if (giftCheck?.needsGiftCode) {
+              return {
+                ok: false,
+                needsGiftCode: true,
+                giftCode: giftCheck.giftCode || "",
+                supplierId: giftCheck.supplierId || payload.supplierId || "",
+                supplierName: giftCheck.supplierName || payload.supplierName || "",
+                diagnostics: bridgeDiagnostics
+              };
+            }
           }
 
           const eventBridgeResponse = await requestPageEventBridge("importChatV3", payload, 8000);
@@ -561,13 +585,10 @@ async function executeGianhapDomImport(tab, payload) {
             };
           }
 
-          if (payload.giftResolution?.code) {
-            return {
-              ok: false,
-              error: bridgeResponse?.error || "Bridge chua xac nhan duoc lan gui sau khi khai bao ma qua tang.",
-              diagnostics: bridgeDiagnostics
-            };
-          }
+          return queuePageImport(
+            bridgeResponse?.error || "Bridge importChatV3 chua phan hoi, da chuyen sang queue noi bo.",
+            bridgeDiagnostics
+          );
         }
 
         const composer = document.querySelector(".chat-composer");
@@ -703,10 +724,6 @@ async function importToGianhap(payload) {
   }
 
   const response = await executeGianhapDomImport(tab, payload);
-
-  if (response?.ok) {
-    await chrome.tabs.update(tab.id, { active: true });
-  }
 
   return response;
 }
