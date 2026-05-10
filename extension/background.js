@@ -226,10 +226,53 @@ async function diagnoseGianhap() {
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: () => {
+      func: async () => {
+        function requestBridge(action, payload = {}, timeoutMs = 2500) {
+          const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+          const requestType = "__GIANHAP_EXTENSION_REQUEST__";
+          const responseType = "__GIANHAP_EXTENSION_RESPONSE__";
+
+          return new Promise((resolve) => {
+            const timeout = setTimeout(() => {
+              window.removeEventListener("message", handleMessage);
+              resolve({
+                ok: false,
+                error: "Bridge khong phan hoi trong thoi gian cho."
+              });
+            }, timeoutMs);
+
+            function handleMessage(event) {
+              if (event.source !== window) {
+                return;
+              }
+
+              const data = event.data || {};
+              if (data.type !== responseType || data.id !== id) {
+                return;
+              }
+
+              clearTimeout(timeout);
+              window.removeEventListener("message", handleMessage);
+              resolve(data);
+            }
+
+            window.addEventListener("message", handleMessage);
+            window.postMessage(
+              {
+                type: requestType,
+                id,
+                action,
+                ...payload
+              },
+              window.location.origin
+            );
+          });
+        }
+
         const composer = document.querySelector(".chat-composer");
         const textarea = composer?.querySelector("textarea") || null;
         const sendButton = composer?.querySelector(".send-button") || null;
+        const bridge = await requestBridge("getState", {}, 2500);
         const composerChips = [...(composer?.querySelectorAll(".supplier-chip") || [])].map((chip) => ({
           text: chip.textContent.trim(),
           active: chip.classList.contains("active"),
@@ -253,7 +296,8 @@ async function diagnoseGianhap() {
           composerSupplierCount: composerChips.length,
           composerSuppliers: composerChips,
           allSupplierCount: document.querySelectorAll(".supplier-chip").length,
-          allSuppliersPreview: allChips
+          allSuppliersPreview: allChips,
+          bridge
         };
       }
     });
