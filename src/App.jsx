@@ -2532,6 +2532,153 @@ function resolveSalePrice(row) {
     await submitPreparedMessage(message, effectiveSettings, supplier, images);
   }
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    const requestType = "__GIANHAP_EXTENSION_REQUEST__";
+    const responseType = "__GIANHAP_EXTENSION_RESPONSE__";
+
+    function postExtensionResponse(id, payload) {
+      window.postMessage(
+        {
+          type: responseType,
+          id,
+          ...payload
+        },
+        window.location.origin
+      );
+    }
+
+    async function handleExtensionRequest(event) {
+      if (event.source !== window) {
+        return;
+      }
+
+      const data = event.data || {};
+      if (data.type !== requestType) {
+        return;
+      }
+
+      const id = String(data.id || "");
+
+      try {
+        if (data.action === "getState") {
+          postExtensionResponse(id, {
+            ok: true,
+            bridgeVersion: 2,
+            supportsDetachedImport: true,
+            loggedIn: Boolean(!isCheckingAuth && auth?.token),
+            suppliers: suppliers.map((supplier) => ({
+              id: supplier.id,
+              name: supplier.name
+            })),
+            activeSupplierId: activeSupplier?.id || "",
+            activeSupplierName: activeSupplier?.name || ""
+          });
+          return;
+        }
+
+        if (data.action === "importChat") {
+          if (isCheckingAuth || !auth?.token) {
+            throw new Error("Tab gianhap.id.vn chua dang nhap xong.");
+          }
+
+          const message = String(data.text || "").trim();
+          if (!message) {
+            throw new Error("Chua co noi dung chat de gui.");
+          }
+
+          const requestedSupplierId = String(data.supplierId || "");
+          const requestedSupplierName = normalizeSearch(data.supplierName || "");
+          const supplier =
+            suppliers.find((item) => item.id === requestedSupplierId) ||
+            suppliers.find((item) => normalizeSearch(item.name) === requestedSupplierName) ||
+            activeSupplier;
+
+          if (!supplier) {
+            throw new Error("Chua chon nha cung cap.");
+          }
+
+          const effectiveSettings = {
+            ...settings,
+            activeSupplierId: supplier.id
+          };
+
+          setShowSupplierRequiredError(false);
+          setSettings(effectiveSettings);
+          await processSubmissionWithGiftCheck(message, effectiveSettings, supplier, [], []);
+          postExtensionResponse(id, {
+            ok: true,
+            supplierId: supplier.id,
+            supplierName: supplier.name
+          });
+          return;
+        }
+
+        if (data.action === "importChatDetached") {
+          if (isCheckingAuth || !auth?.token) {
+            throw new Error("Tab gianhap.id.vn chua dang nhap xong.");
+          }
+
+          const message = String(data.text || "").trim();
+          if (!message) {
+            throw new Error("Chua co noi dung chat de gui.");
+          }
+
+          const requestedSupplierId = String(data.supplierId || "");
+          const requestedSupplierName = normalizeSearch(data.supplierName || "");
+          const supplier =
+            suppliers.find((item) => item.id === requestedSupplierId) ||
+            suppliers.find((item) => normalizeSearch(item.name) === requestedSupplierName) ||
+            activeSupplier;
+
+          if (!supplier) {
+            throw new Error("Chua chon nha cung cap.");
+          }
+
+          const effectiveSettings = {
+            ...settings,
+            activeSupplierId: supplier.id
+          };
+
+          setShowSupplierRequiredError(false);
+          setSettings(effectiveSettings);
+          setInput(message);
+          postExtensionResponse(id, {
+            ok: true,
+            queued: true,
+            supplierId: supplier.id,
+            supplierName: supplier.name
+          });
+
+          Promise.resolve()
+            .then(() => processSubmissionWithGiftCheck(message, effectiveSettings, supplier, [], []))
+            .catch((error) => {
+              addMessage("assistant", error.message || "Khong nhan duoc du lieu tu extension.");
+              setStatus("Can kiem tra du lieu tu extension.");
+            });
+          return;
+        }
+
+        throw new Error("Lenh extension khong hop le.");
+      } catch (error) {
+        postExtensionResponse(id, {
+          ok: false,
+          error: error.message || "Khong nhan duoc du lieu tu extension."
+        });
+      }
+    }
+
+    window.addEventListener("message", handleExtensionRequest);
+    window.dispatchEvent(new CustomEvent("gianhap-extension-bridge-ready"));
+
+    return () => {
+      window.removeEventListener("message", handleExtensionRequest);
+    };
+  }, [isCheckingAuth, auth?.token, settings, suppliers, activeSupplier, selectedProvider]);
+
   async function confirmGiftCode(event) {
     event.preventDefault();
     if (!pendingSubmission || !pendingGiftCode) {
