@@ -326,6 +326,15 @@ async function diagnoseGianhap() {
           readyState: document.readyState,
           lastExtensionImport: window.__gianhapLastExtensionImport || null,
           lastExtensionImportResult: window.__gianhapLastExtensionImportResult || null,
+          queuedImport: window.__gianhapExtensionQueuedImport
+            ? {
+                id: window.__gianhapExtensionQueuedImport.id || "",
+                supplierId: window.__gianhapExtensionQueuedImport.supplierId || "",
+                supplierName: window.__gianhapExtensionQueuedImport.supplierName || "",
+                textLength: String(window.__gianhapExtensionQueuedImport.text || "").length,
+                queuedAt: window.__gianhapExtensionQueuedImport.queuedAt || ""
+              }
+            : null,
           hasLoginCard: Boolean(document.querySelector(".login-card")),
           hasComposer: Boolean(composer),
           hasTextarea: Boolean(textarea),
@@ -495,7 +504,7 @@ async function executeGianhapDomImport(tab, payload) {
 
         function queuePageImport(reason = "", diagnostics = {}) {
           const queueId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-          window.__gianhapExtensionQueuedImport = {
+          const queuedImport = {
             id: queueId,
             text,
             supplierId: String(payload.supplierId || ""),
@@ -503,18 +512,27 @@ async function executeGianhapDomImport(tab, payload) {
             giftResolution: payload.giftResolution || null,
             queuedAt: new Date().toISOString()
           };
-          window.__gianhapLastExtensionImportResult = {
+          const queuedResult = {
             ok: false,
             queued: true,
             id: queueId,
             reason,
             queuedAt: new Date().toISOString()
           };
+          const script = document.createElement("script");
+          script.textContent = `
+            window.__gianhapExtensionQueuedImport = ${JSON.stringify(queuedImport)};
+            window.__gianhapLastExtensionImportResult = ${JSON.stringify(queuedResult)};
+            window.dispatchEvent(new CustomEvent("gianhap-extension-queued-import", { detail: window.__gianhapExtensionQueuedImport }));
+          `;
+          (document.documentElement || document.head || document.body).appendChild(script);
+          script.remove();
 
           return {
             ok: true,
             queued: true,
             usedQueue: true,
+            queueId,
             supplierId: String(payload.supplierId || ""),
             supplierName: String(payload.supplierName || ""),
             diagnostics
@@ -532,6 +550,14 @@ async function executeGianhapDomImport(tab, payload) {
         };
 
         if (bridgeState?.ok && bridgeState.supportsImportV3) {
+          if (!bridgeState.supportsQueuedImport) {
+            return {
+              ok: false,
+              error: "Tab gianhap.id.vn chua co queue bridge moi. Hay deploy lai dist va refresh tab gianhap.id.vn.",
+              diagnostics: bridgeDiagnostics
+            };
+          }
+
           const hasGiftResolution = Boolean(payload.giftResolution?.code);
           if (!hasGiftResolution) {
             const eventGiftCheck = await requestPageEventBridge("checkGiftCode", payload, 5000);

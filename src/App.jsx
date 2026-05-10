@@ -2720,16 +2720,20 @@ function resolveSalePrice(row) {
         if (data.action === "getState") {
           postExtensionResponse(id, {
             ok: true,
-            bridgeVersion: 3,
+            bridgeVersion: 4,
             supportsDetachedImport: true,
             supportsImportV3: true,
+            supportsQueuedImport: true,
             loggedIn: Boolean(!isCheckingAuth && auth?.token),
             suppliers: suppliers.map((supplier) => ({
               id: supplier.id,
               name: supplier.name
             })),
             activeSupplierId: activeSupplier?.id || "",
-            activeSupplierName: activeSupplier?.name || ""
+            activeSupplierName: activeSupplier?.name || "",
+            lastExtensionImport: window.__gianhapLastExtensionImport || null,
+            lastExtensionImportResult: window.__gianhapLastExtensionImportResult || null,
+            hasQueuedImport: Boolean(window.__gianhapExtensionQueuedImport)
           });
           return;
         }

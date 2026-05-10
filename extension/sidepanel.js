@@ -414,14 +414,26 @@ async function sendToGianhap(options = {}) {
     return;
   }
 
+  if (response.usedQueue) {
+    setStatus(`Da chuyen vao hang doi gianhap.id.vn cho ${response.supplierName || state.selectedSupplierName}.`);
+    setDebugOutput({
+      queued: {
+        queueId: response.queueId || "",
+        supplierId: response.supplierId || state.selectedSupplierId,
+        supplierName: response.supplierName || state.selectedSupplierName
+      },
+      note: "Neu bang tren web chua cap nhat, bam Kiem tra ket noi de xem lastExtensionImportResult."
+    });
+    saveDraft();
+    return;
+  }
+
   chrome.storage.local.remove(DRAFT_KEY);
   elements.chatText.value = "";
   state.selectedSegments = [];
   clearPendingGift();
   setStatus(
-    response.usedQueue
-      ? `Da chuyen vao hang doi gianhap.id.vn cho ${response.supplierName || state.selectedSupplierName}.`
-      : response.usedBridge
+    response.usedBridge
       ? `Da gui qua bridge gianhap.id.vn cho ${response.supplierName || state.selectedSupplierName}.`
       : `Da bam Gui tren gianhap.id.vn cho ${response.supplierName || state.selectedSupplierName}.`
   );
